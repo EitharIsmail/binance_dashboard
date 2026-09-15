@@ -5,9 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "catboost>=1.2.10",
+    "lightgbm>=4.7.0",
     "matplotlib>=3.11.1",
+    "mlflow>=3.16.0",
     "numpy>=2.5.2",
     "pandas>=3.0.5",
+    "prefect>=3.8.5",
     "pyarrow>=25.0.1",
     "requests>=2.34.2",
     "scikit-learn>=1.9.0",
