@@ -1,3 +1,9 @@
+## The problem:
+
+## The suggested solution:
+
+## System Components Explanation:
+
 ## Features Explanation:
 
 | Feature            | What it measures                        | Simple meaning                                         |
