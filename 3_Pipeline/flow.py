@@ -7,6 +7,9 @@ from src.Data.data_acquisition import BinanceDataAcquisition
 from src.Data.data_preprocessing import DataPreprocessor
 from src.Features.feature_engineering import FeatureEngineer, align_features_and_target
 from src.Models.model_training import ModelTrainingPipeline
+from config.config import load_config
+
+config = load_config()
 
 
 
@@ -87,12 +90,12 @@ def align_and_save(X_features, y, output_dir: str):
 # TASK 5 — Model Training & Evaluation
 # =============================================================================
 @task(name="train-and-evaluate", retries=1)
-def train_and_evaluate(X, y, val_ratio: float, test_ratio: float):
+def train_and_evaluate(X, y, val_ratio: float, test_ratio: float, tracking_uri: str):
     """Runs the full model-selection pipeline as a single class call."""
     logger = get_run_logger()
     logger.info("🤖 Step 5: Model Training & Evaluation")
 
-    pipeline = ModelTrainingPipeline(val_ratio=val_ratio, test_ratio=test_ratio)
+    pipeline = ModelTrainingPipeline(val_ratio=val_ratio, test_ratio=test_ratio, tracking_uri=tracking_uri)
     result = pipeline.run(X, y)
 
     logger.info(f"✅ Best model: {result['best_model_name']}")
@@ -167,7 +170,7 @@ def binance_ml_pipeline(
 
     training_result = train_and_evaluate(
         X=X_final, y=y_final,
-        val_ratio=val_ratio, test_ratio=test_ratio,
+        val_ratio=val_ratio, test_ratio=test_ratio, tracking_uri=config.mlflow.tracking_uri,
     )
 
     logger.info(

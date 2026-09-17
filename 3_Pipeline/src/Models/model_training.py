@@ -268,11 +268,13 @@ class ModelTrainingPipeline:
         test_ratio: float = 0.15,
         models: Optional[Dict[str, object]] = None,
         experiment_name: str = "binance-ml-pipeline",
+        tracking_uri: str = "http://127.0.0.1:5000",
     ):
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.models = models or get_default_models()
         self.experiment_name = experiment_name
+        self.tracking_uri = tracking_uri
 
         # populated by run()
         self.preprocessor = None
@@ -283,6 +285,7 @@ class ModelTrainingPipeline:
         self.test_metrics: Optional[dict] = None
 
     def run(self, X: pd.DataFrame, y: pd.Series) -> dict:
+        mlflow.set_tracking_uri(self.tracking_uri)
         mlflow.set_experiment(self.experiment_name)
 
         X_train, y_train, X_val, y_val, X_test, y_test = chronological_train_val_test_split(
