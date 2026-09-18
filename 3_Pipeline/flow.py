@@ -7,6 +7,7 @@ from src.Data.data_acquisition import BinanceDataAcquisition
 from src.Data.data_preprocessing import DataPreprocessor
 from src.Features.feature_engineering import FeatureEngineer, align_features_and_target
 from src.Models.model_training import ModelTrainingPipeline
+from src.Models.model_registry import deploy_if_better
 from config.config import load_config
 
 config = load_config()
@@ -90,19 +91,43 @@ def align_and_save(X_features, y, output_dir: str):
 # TASK 5 — Model Training & Evaluation
 # =============================================================================
 @task(name="train-and-evaluate", retries=1)
-def train_and_evaluate(X, y, val_ratio: float, test_ratio: float, tracking_uri: str):
+def train_and_evaluate(
+    X, y, symbol: str, horizon: str, val_ratio: float, test_ratio: float, tracking_uri: str
+):
     """Runs the full model-selection pipeline as a single class call."""
     logger = get_run_logger()
     logger.info("🤖 Step 5: Model Training & Evaluation")
 
     pipeline = ModelTrainingPipeline(val_ratio=val_ratio, test_ratio=test_ratio, tracking_uri=tracking_uri)
-    result = pipeline.run(X, y)
+    result = pipeline.run(X, y, symbol=symbol, horizon=horizon)
 
     logger.info(f"✅ Best model: {result['best_model_name']}")
     logger.info(f"   Test Accuracy: {result['test_metrics']['test_accuracy']:.4f}")
     logger.info(f"   Test Macro F1: {result['test_metrics']['test_f1_macro']:.4f}")
 
     return result
+
+
+# =============================================================================
+# TASK 6 — Model Deployment (registry stage transitions)
+# =============================================================================
+@task(name="deploy-model", retries=1)
+def deploy_model(training_result: dict, symbol: str, horizon: str):
+    """Registers the trained model and promotes it to Production if it
+    beats the current incumbent -- otherwise leaves it in Staging."""
+    logger = get_run_logger()
+    logger.info("🚀 Step 6: Model Deployment")
+
+    status = deploy_if_better(
+        run_id=training_result["run_id"],
+        val_f1=training_result["val_results"].iloc[0]["Validation Macro F1"],
+        test_f1=training_result["test_metrics"]["test_f1_macro"],
+        symbol=symbol,
+        horizon=horizon,
+    )
+
+    logger.info(f"✅ Deployment status: {status}")
+    return status
 
 
 
@@ -135,7 +160,8 @@ def binance_ml_pipeline(
       2. Preprocess + label
       3. Feature Eng.
       4. Align + save
-      5. Train & Evaluate  <-- now implemented
+      5. Train & Evaluate
+      6. Deploy (register -> Staging -> Production if better)  <-- now implemented
     """
     logger = get_run_logger()
 
@@ -170,15 +196,22 @@ def binance_ml_pipeline(
 
     training_result = train_and_evaluate(
         X=X_final, y=y_final,
-        val_ratio=val_ratio, test_ratio=test_ratio, tracking_uri=config.mlflow.tracking_uri,
+        symbol=symbol, horizon=horizon,
+        val_ratio=val_ratio, test_ratio=test_ratio,
+        tracking_uri=config.mlflow.tracking_uri,
+    )
+
+    deployment_status = deploy_model(
+        training_result=training_result, symbol=symbol, horizon=horizon,
     )
 
     logger.info(
         f"🏁 Pipeline complete! X: {x_path}, y: {y_path}, "
-        f"best model: {training_result['best_model_name']}"
+        f"best model: {training_result['best_model_name']}, "
+        f"deployment: {deployment_status}"
     )
-    return x_path, y_path, training_result
+    return x_path, y_path, training_result, deployment_status
 
 
 if __name__ == "__main__":
-    binance_ml_pipeline()
+    binance_ml_pipeline() 

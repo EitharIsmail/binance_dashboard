@@ -26,6 +26,10 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
 
+from config.config import MLflowConfig
+
+config = MLflowConfig()
+
 logger = logging.getLogger(__name__)
 
 # Target labels are -1 (Bear), 0 (Neutral), 1 (Bull). XGBoost/LightGBM/CatBoost
@@ -256,10 +260,13 @@ class ModelTrainingPipeline:
     """
     End-to-end model selection pipeline:
       split -> preprocess -> train all candidates -> pick best on val ->
-      log to MLflow -> evaluate best model once on test.
+      log to MLflow (as a bundled preprocessor+classifier Pipeline,
+      registered under a symbol/horizon-specific name) -> evaluate best
+      model once on test.
 
-    Call `.run(X, y)`. Intermediate state (fitted preprocessor, results
-    table, chosen model) is kept on `self` for inspection after the run.
+    Call `.run(X, y, symbol=..., horizon=...)`. Intermediate state (fitted
+    preprocessor, results table, chosen model) is kept on `self` for
+    inspection after the run.
     """
 
     def __init__(
@@ -284,7 +291,7 @@ class ModelTrainingPipeline:
         self.run_id: Optional[str] = None
         self.test_metrics: Optional[dict] = None
 
-    def run(self, X: pd.DataFrame, y: pd.Series) -> dict:
+    def run(self, X: pd.DataFrame, y: pd.Series, symbol: str, horizon: str) -> dict:
         mlflow.set_tracking_uri(self.tracking_uri)
         mlflow.set_experiment(self.experiment_name)
 
@@ -311,10 +318,14 @@ class ModelTrainingPipeline:
             f"(F1 macro={best_row['Validation Macro F1']:.4f})"
         )
 
-        with mlflow.start_run(run_name=self.best_model_name) as run:
+        registered_model_name = config.registered_model_name(symbol, horizon,)
+
+        with mlflow.start_run(run_name=f"{symbol}_{horizon}_{self.best_model_name}") as run:
             self.run_id = run.info.run_id
             mlflow.log_params({
                 "model_name": self.best_model_name,
+                "symbol": symbol,
+                "horizon": horizon,
                 "val_ratio": self.val_ratio,
                 "test_ratio": self.test_ratio,
             })
@@ -323,6 +334,21 @@ class ModelTrainingPipeline:
                 "val_f1_macro": best_row["Validation Macro F1"],
                 "train_time_s": best_row["Train Time (s)"],
             })
+
+            # Bundle preprocessor + classifier into ONE deployable sklearn
+            # Pipeline before logging -- a registered model version is one
+            # opaque artifact, not a separately-tracked pair. This is what
+            # Predictor.predict() in model_deployment.py calls directly.
+            full_pipeline = Pipeline(steps=[
+                ("preprocessor", self.preprocessor),
+                ("classifier", self.best_model),
+            ])
+            mlflow.sklearn.log_model(
+                full_pipeline,
+                artifact_path="model",
+                registered_model_name=registered_model_name,
+                skops_trusted_types=["numpy.dtype"],
+            )
 
         # Test set touched exactly once, after selection is final.
         self.test_metrics = evaluate_on_test(

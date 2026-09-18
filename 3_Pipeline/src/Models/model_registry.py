@@ -15,15 +15,21 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MLflowConfig:
     """
-    Minimal stand-in for a project-wide config.config.MLflowConfig -- this
-    project doesn't have a config module yet, so this lives here for now.
-    If/when a real config module exists, import from there instead and
-    delete this class.
+    Registry config for one (symbol, horizon) model. model_name is
+    computed from the two -- e.g. symbol="BTCUSDT", horizon="30m" ->
+    model_name="BTCUSDT_30m_classifier" -- so each coin/horizon
+    combination gets its own independent registry entry and version
+    history rather than colliding under one shared name.
     """
-    model_name: str = "btc_direction_classifier"
+    symbol: str
+    horizon: str
     staging_stage: str = "Staging"
     production_stage: str = "Production"
     archived_stage: str = "Archived"
+
+    @property
+    def model_name(self) -> str:
+        return f"{self.symbol}_{self.horizon}_classifier"
 
 
 class ModelRegistry:
@@ -75,11 +81,12 @@ class ModelRegistry:
         """
         Register a logged model artifact as a new model version.
 
-        Assumes the model (and its preprocessing -- bundle preprocessor +
-        classifier into a single sklearn Pipeline before logging, since a
-        registered model version is one opaque artifact, not a pair of
-        separately-tracked files) was already logged inside this run via
-        mlflow.sklearn.log_model(pipeline, artifact_path=artifact_path).
+        Note: if the model was logged via mlflow.sklearn.log_model(...,
+        registered_model_name=...) (as ModelTrainingPipeline.run() does),
+        a version already exists for that run and this call is usually
+        redundant -- but it's kept here as a standalone, explicit
+        registration path for any caller that logs a model WITHOUT
+        registered_model_name and wants to register it after the fact.
 
         Args:
             run_id: MLflow run ID the model was logged under
@@ -246,3 +253,72 @@ class ModelRegistry:
             MLflow model URI
         """
         return f"models:/{self.model_name}/{stage}"
+
+
+# =============================================================================
+# Deployment gate — registers a trained run and promotes it if it's better
+# than the current production incumbent (or if there is no incumbent yet).
+# =============================================================================
+def deploy_if_better(
+    run_id: str,
+    val_f1: float,
+    test_f1: float,
+    symbol: str,
+    horizon: str,
+    min_f1_improvement: float = 0.01,
+) -> str:
+    """
+    Registers the model from `run_id`, promotes it to Staging always, and
+    promotes it further to Production only if it beats the CURRENT
+    production model's test F1 by at least `min_f1_improvement` -- or if
+    there is no production model yet.
+
+    Note: since ModelTrainingPipeline.run() already logs the model with
+    registered_model_name set, a version typically already exists for this
+    run_id by the time this function is called. register_model() here is
+    effectively a defensive no-op / re-registration attempt in that case
+    (MLflow will just create an additional version pointing at the same
+    artifact if called again) -- kept for robustness against callers that
+    log without registered_model_name.
+
+    Returns a short status string describing what happened.
+    """
+    client = MlflowClient()
+    config = MLflowConfig(symbol=symbol, horizon=horizon)
+    registry = ModelRegistry(mlflow_config=config, client=client)
+
+    version = registry.find_version_by_run_id(run_id)
+    if version is None:
+        version = registry.register_model(run_id=run_id, artifact_path="model")
+    if version is None:
+        return "registration_failed"
+
+    registry.transition_to_staging(
+        run_id=run_id,
+        description=f"{symbol} {horizon} classifier, val_f1={val_f1:.4f}, test_f1={test_f1:.4f}",
+        tags={"val_f1": val_f1, "test_f1": test_f1},
+    )
+
+    current_prod = registry.get_model_by_stage(config.production_stage)
+    if current_prod is None:
+        registry.transition_to_production(version)
+        logger.info(f"🚀 No prior production model -- v{version} promoted directly.")
+        return "promoted_first_production"
+
+    # Compare against the incumbent's logged test_f1_macro metric.
+    prod_run = client.get_run(current_prod.run_id)
+    prod_test_f1 = prod_run.data.metrics.get("test_f1_macro", 0.0)
+
+    if test_f1 >= prod_test_f1 + min_f1_improvement:
+        registry.transition_to_production(version)
+        logger.info(
+            f"🚀 v{version} promoted: test_f1={test_f1:.4f} beats "
+            f"incumbent's {prod_test_f1:.4f} by >= {min_f1_improvement}."
+        )
+        return "promoted_new_champion"
+
+    logger.info(
+        f"⏸️  v{version} stays in Staging: test_f1={test_f1:.4f} doesn't beat "
+        f"incumbent's {prod_test_f1:.4f} by >= {min_f1_improvement}."
+    )
+    return "kept_in_staging"

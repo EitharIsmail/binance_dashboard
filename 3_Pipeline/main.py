@@ -85,7 +85,7 @@ def main() -> None:
     for key, value in vars(args).items():
         logger.info(f"  {key}: {value}")
 
-    x_path, y_path, training_result = binance_ml_pipeline(
+    x_path, y_path, training_result, deployment_status = binance_ml_pipeline(
         symbol=args.symbol,
         interval=args.interval,
         start_year=args.start_year,
@@ -105,6 +105,7 @@ def main() -> None:
     logger.info(f"  X saved to: {x_path}")
     logger.info(f"  y saved to: {y_path}")
     logger.info(f"  Best model: {training_result['best_model_name']}")
+    logger.info(f"  Deployment status: {deployment_status}")
     logger.info(f"  Test accuracy: {training_result['test_metrics']['test_accuracy']:.4f}")
     logger.info(f"  Test F1 macro: {training_result['test_metrics']['test_f1_macro']:.4f}")
     logger.info(f"  MLflow run ID: {training_result['run_id']}")

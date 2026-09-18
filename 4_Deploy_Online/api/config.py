@@ -29,6 +29,9 @@ class DataConfig:
     processed_dir: str = "data/processed"
     features_dir: str = "data/features"
 
+    BINANCE_VISION_BASE_URL = (
+    "https://data.binance.vision/data/spot/monthly/klines")
+
     # Coins the dashboard is allowed to offer. Each one requires its own
     # trained model (see the multi-coin explanation below) -- this list is
     # the single source of truth for both training runs and dashboard UI.
