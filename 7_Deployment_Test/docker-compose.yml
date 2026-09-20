@@ -1,0 +1,51 @@
+services:
+  mlflow:
+    build:
+      context: ./mlflow
+    image: binance-mlflow
+    container_name: binance-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlruns
+      - mlflow_backend:/mlflow_backend
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow_backend/mlflow.db
+      --default-artifact-root mlflow-artifacts:/
+      --artifacts-destination /mlruns
+      --host 0.0.0.0
+      --port 5000
+      --allowed-hosts "*"
+      --uvicorn-opts "--forwarded-allow-ips=*"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./api
+    image: binance-api
+    container_name: binance-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - mlflow
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+    image: binance-dashboard
+    container_name: binance-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - ONLINE_API=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  mlflow_data:
+  mlflow_backend:
