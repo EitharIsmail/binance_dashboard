@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 RUN pip install uv
 
@@ -9,10 +9,10 @@ WORKDIR /app
 # pipeline uses, so feature computation and label mapping stay identical
 # between training and serving.
 COPY shared/ ./shared/
-COPY config/ ./config/
+#COPY config/ ./config/
 COPY api/ ./api/
 
-RUN uv pip install --no-cache-dir -r api/requirements.txt
+RUN uv pip install --system --no-cache-dir -r api/requirements.txt
 
 EXPOSE 8000
 

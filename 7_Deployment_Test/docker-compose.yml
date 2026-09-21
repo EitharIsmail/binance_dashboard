@@ -1,51 +1,76 @@
 services:
+  # ─────────────────────────────────────────────────────────────
+  # MLflow Tracking Server — remote registry, replaces local sqlite file
+  # ─────────────────────────────────────────────────────────────
   mlflow:
-    build:
-      context: ./mlflow
-    image: binance-mlflow
+    image: ghcr.io/mlflow/mlflow:latest
     container_name: binance-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root mlflow-artifacts:/
+      --artifacts-destination /mlruns
+      --serve-artifacts
+      --uvicorn-opts "--forwarded-allow-ips=*"
+      --allowed-hosts "*"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     ports:
       - "5000:5000"
     volumes:
-      - mlflow_data:/mlruns
-      - mlflow_backend:/mlflow_backend
-    command: >
-      mlflow server
-      --backend-store-uri sqlite:////mlflow_backend/mlflow.db
-      --default-artifact-root mlflow-artifacts:/
-      --artifacts-destination /mlruns
-      --host 0.0.0.0
-      --port 5000
-      --allowed-hosts "*"
-      --uvicorn-opts "--forwarded-allow-ips=*"
+      - ./mlflow:/mlflow
+      - ./mlruns:/mlruns
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────
+  # Online API (FastAPI) — /health, /predict for the fixed 30m BTC model
+  # ─────────────────────────────────────────────────────────────
   api:
     build:
-      context: ./api
-    image: binance-api
+      context: ../4_Deploy_Online
+      dockerfile: api/Dockerfile
     container_name: binance-api
-    ports:
-      - "8000:8000"
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - ROOT_PATH=/api
     depends_on:
       - mlflow
+    ports:
+      - "8000:8000"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
+  # ─────────────────────────────────────────────────────────────
+  # Dashboard (Streamlit) — single "Predict" button, 30m BTC only
+  # ─────────────────────────────────────────────────────────────
   dashboard:
     build:
       context: ./dashboard
-    image: binance-dashboard
     container_name: binance-dashboard
-    ports:
-      - "8501:8501"
     environment:
       - ONLINE_API=http://api:8000
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
     depends_on:
       - api
+    ports:
+      - "8501:8501"
     restart: unless-stopped
-
-volumes:
-  mlflow_data:
-  mlflow_backend:
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
