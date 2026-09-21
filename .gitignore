@@ -24,3 +24,9 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+
+#databse
+*.db
+
+#catbost:
+/home/eithar/Documents/Coding/binance_dashboard/3_Pipeline/catboost_info
