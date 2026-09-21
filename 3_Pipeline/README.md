@@ -1,224 +1,1593 @@
-# Binance ML Pipeline — Pipeline & Orchestration Reference
+# Binance ML Pipeline
 
-This document explains what each file in the pipeline does, why it exists, and exactly what it returns to the next stage. Read it top-to-bottom to follow data as it flows from a raw Binance download through to a deployed, servable model.
+> **Offline data, feature engineering, model training, evaluation, experiment tracking, and model promotion pipeline for Binance market-direction prediction.**
 
-**Pipeline order:** `data_acquisition.py` → `data_preprocessing.py` → `feature_engineering.py` → `model_training.py` → `model_registry.py` → `model_deployment.py`, all orchestrated by `flow.py` and launched from `main.py`.
+This directory contains the **offline machine-learning pipeline** for the Binance Direction Classifier project.
 
----
+Its responsibility is to transform historical Binance market data into a trained, evaluated, versioned, and potentially deployable machine-learning model.
 
-## 1. `data_acquisition.py` — `BinanceDataAcquisition`
-
-### Where the data comes from, and why
-
-Data is pulled from **Binance Vision** (`https://data.binance.vision`), Binance's public historical-data archive. Binance publishes monthly ZIP files of raw OHLCV (open/high/low/close/volume) candlestick data per symbol/interval combination — e.g. one file per month for `BTCUSDT` at `15m` candles. This is used instead of Binance's live REST/WebSocket API because:
-
-- It's free, requires no API key, and has no rate-limiting concerns for historical backfills.
-- It's the *canonical* historical record — the same source Binance's own charts are built from — so results are reproducible.
-- Pulling a year+ of 15-minute candles via the live API would mean thousands of paginated calls; the monthly archive gets the same data in a handful of large downloads.
-
-### What it does
-
-1. `generate_monthly_urls()` builds one Binance Vision URL per calendar month in the requested date range (using month-start (`'MS'`) date stepping to avoid a 30-day drift bug that occurs with naive day-counting).
-2. `download_and_extract_zip()` downloads each monthly ZIP, extracts the single CSV inside it, and assigns Binance's fixed 12-column kline schema (`open_time`, `open`, `high`, `low`, `close`, `volume`, `close_time`, `quote_asset_volume`, `number_of_trades`, `taker_buy_base_asset_volume`, `taker_buy_quote_asset_volume`, `ignore`).
-3. `process_timestamps_and_types()` fixes a known Binance quirk where some months ship timestamps in microseconds instead of milliseconds (detected via magnitude, `> 1e14`), and casts OHLCV columns to `float`.
-4. `combine_and_clean_dataframes()` concatenates every month, sorts chronologically by `open_time`, and drops any duplicate timestamps (can occur at month boundaries).
-5. Saves the combined result to `data/raw/{symbol}_{interval}_raw.parquet` for reproducibility, so the exact same raw pull can be reloaded without re-downloading.
-
-### What the file returns
-
-`BinanceDataAcquisition.run(start_date, end_date)` returns a single **raw** `pandas.DataFrame`:
-
-- One row per candle, sorted chronologically, no duplicate timestamps
-- 12 columns: the untouched Binance kline schema listed above
-- `open_time` as a real `datetime64` column; OHLCV columns as `float`
-- **Nothing engineered yet** — no target, no indicators. This is the rawest usable form of the market data.
+The pipeline is orchestrated with **Prefect** and uses **MLflow** for experiment tracking and model registry operations.
 
 ---
 
-## 2. `data_preprocessing.py` — `DataPreprocessor`
+# Pipeline Objective
 
-### What we got, and what we did with it
+The online application needs a trained model that can answer a question such as:
 
-This stage takes the raw OHLCV DataFrame from Step 1 and does two distinct jobs: **cleaning** the data, and **creating the prediction target** (`y`). Target creation lives here — not in feature engineering — because the label only ever depends on the raw `close` price; it needs no engineered indicator to be computed.
+> **Given recent Bitcoin market behavior, what is the predicted direction of the price over the next 30 minutes?**
 
-**Cleaning steps** (`validate_and_cast_types`, `sort_and_deduplicate`, `handle_missing_values`):
-- Re-validates/casts `open_time` to datetime and core OHLCV columns to numeric, defensively, in case the raw parquet was reloaded from disk with lost dtype info.
-- Re-sorts chronologically and re-drops duplicate timestamps (defensive — should already be clean from Step 1, but this stage doesn't assume that).
-- Fills missing values via **forward-fill only** (never backward-fill or interpolation) — this is deliberate: backward-filling or interpolating would let a *future* value leak into a *past* row, which is a subtle form of data leakage in a time-series model. Any row still missing core data after forward-fill is dropped outright.
+The offline pipeline prepares that model.
 
-**Target creation** (`create_target`, `drop_unlabelable_rows`):
-- For every row, looks `horizon_periods` candles into the future (`horizon` ÷ `interval` — e.g. `30m` horizon at `15m` candles = 2 periods ahead) and computes the forward return: `(future_close − close) / close`.
-- Labels the row:
-  - **`1` (Bull)** if the forward return ≥ `target_threshold` (default 0.2%)
-  - **`-1` (Bear)** if the forward return ≤ `-target_threshold`
-  - **`0` (Neutral)** otherwise
-- The last `horizon_periods` rows of the dataset have no future candle to look at (the shift runs off the end of the series) — these are unlabelable and are dropped.
+At a high level:
 
-### Why we calculate `y` this way
+```text
+Binance Historical Data
+        │
+        ▼
+Data Acquisition
+        │
+        ▼
+Data Validation & Cleaning
+        │
+        ▼
+Target Creation
+        │
+        ▼
+Feature Engineering
+        │
+        ▼
+Chronological Train / Validation / Test Split
+        │
+        ▼
+Preprocessing
+        │
+        ▼
+Train Multiple Models
+        │
+        ▼
+Validation Model Selection
+        │
+        ▼
+Test Evaluation
+        │
+        ▼
+MLflow Experiment Tracking
+        │
+        ▼
+MLflow Model Registry
+        │
+        ▼
+Staging / Production Decision
+```
 
-The goal isn't to predict an exact future price (regression) — it's to predict *direction with a meaningful magnitude*, filtered through a noise threshold. A pure up/down (2-class) label would treat tiny, directionless wiggles the same as a real move, which is mostly noise at short horizons. The 3-class Bull/Neutral/Bear scheme with a threshold explicitly separates "this is a real, tradeable move" from "this is noise around zero" — which is also why the resulting classes are imbalanced (Neutral dominates at tight thresholds/short horizons), a fact that later stages (`compute_sample_weight("balanced", ...)` in model training) explicitly correct for.
+The pipeline is intentionally separated from online serving.
 
-### What the file returns
-
-`DataPreprocessor.run(df)` returns a tuple **`(X, y)`**:
-
-- **`X`**: a DataFrame containing every original raw column *except* the three target-derived helper columns (`future_close`, `future_return`, `target` itself). Still includes `open_time` and unmodified OHLCV — no technical indicators yet.
-- **`y`**: an integer `pandas.Series`, one label per remaining row, valued `{-1, 0, 1}` for Bear/Neutral/Bull.
-- Also persists the full cleaned+labeled DataFrame to `data/processed/cleaned_{input_stem}.parquet` for inspection/reproducibility.
-
----
-
-## 3. `feature_engineering.py` — `FeatureEngineer`
-
-### What it does
-
-Takes `X` from Step 2 (raw OHLCV, no indicators) and computes technical indicators — the actual predictive signals the models will learn from. Implemented as a scikit-learn-compatible `TransformerMixin`, so it can later be slotted into a full sklearn `Pipeline` alongside the preprocessor and classifier.
-
-### Engineered features
-
-| Feature | Formula / Definition | How it contributes to predicting `y` |
-|---|---|---|
-| `return_1` | 1-period percent change in `close` | The most recent single-candle momentum — direct, short-term directional signal. |
-| `return_3` | 3-period percent change in `close` | A slightly smoothed momentum reading; filters single-candle noise that `return_1` alone can't. |
-| `volatility_10` | Rolling 10-period standard deviation of `return_1` | Measures how turbulent the market currently is. High volatility makes the Bull/Bear threshold easier to cross (more relevant when combined with the target's fixed % threshold), so this helps the model gauge *how likely* a real move is right now, independent of direction. |
-| `ema_20` | Exponential moving average, span 20 | A smoothed short-term trend line — where price is "centered" over the recent past. |
-| `ema_50` | Exponential moving average, span 50 | A smoothed medium-term trend line. Comparing `ema_20` vs `ema_50` (implicitly, via the two separate columns) lets tree-based models learn crossover-style trend signals. |
-| `dist_from_ema_20` | `(close − ema_20) / ema_20` | How far current price has stretched away from its short-term trend, as a percentage. Large deviations often precede mean-reversion (pulling back toward Neutral) or trend continuation — a key input for distinguishing a real breakout from a temporary spike. |
-| `rsi_14` | Relative Strength Index, 14-period (Wilder's smoothing via `ewm(alpha=1/14)`) | Classic overbought/oversold oscillator (0–100 scale). Extreme values (near 0 or 100) are associated with exhaustion of a move — directly relevant to whether a Bull/Bear move is likely to continue or reverse to Neutral. |
-| `volume_sma_20` | Rolling 20-period simple average of `volume` | Baseline "typical" trading volume, used only as the denominator for `volume_ratio` below. |
-| `volume_ratio` | `volume / volume_sma_20` | Current volume relative to its recent normal level. A move on unusually high volume is more likely to be a genuine, sustained directional move (Bull/Bear) than one on thin volume, which is more likely noise (Neutral). |
-
-### Why NaNs appear here (and not earlier)
-
-Every rolling/EWM feature above needs a warm-up window before it has enough history to compute a real value (e.g. `ema_50` needs ~50 prior rows). These NaNs don't exist until this transform runs — which is exactly why `align_features_and_target()` (also in this file) has to run *after* feature engineering, not inside `DataPreprocessor`.
-
-### What the file returns
-
-- `FeatureEngineer.fit_transform(X)` returns `X` with all 9 columns above appended (original columns preserved) — shape grows from the ~12 raw columns to 21.
-- `align_features_and_target(X, y)` returns a tuple **`(X_aligned, y_aligned)`**: both re-indexed to drop the warm-up NaN rows and stay row-aligned with each other, ready for the train/val/test split.
+**Training happens offline; prediction happens online.**
 
 ---
 
-## 4. `model_training.py` — model bench, preprocessing, and `ModelTrainingPipeline`
+# Why an Offline Pipeline?
 
-### What it does, briefly
+Training a machine-learning model is computationally more expensive than making a single prediction.
 
-This is the largest stage: it splits the fully-featured data chronologically into train/val/test, fits a numeric-only imputer+scaler, benches 10 classifiers against the validation set, and evaluates the winner once on the held-out test set — all wrapped in one `ModelTrainingPipeline.run(X, y)` call. `LABEL_MAP`/`INVERSE_LABEL_MAP` remap the `{-1, 0, 1}` Bear/Neutral/Bull labels to `{0, 1, 2}`, since XGBoost/LightGBM/CatBoost require contiguous non-negative class labels — this mapping is the single source of truth other files (`model_deployment.py`) rely on to translate predictions back to human-readable labels.
+Instead of training a model every time a user requests a prediction, this project follows a model lifecycle:
 
-### The 10 candidate models
+```text
+Train
+  ↓
+Evaluate
+  ↓
+Register
+  ↓
+Promote
+  ↓
+Serve
+```
 
-| Model | Key hyperparameters set | What they control | Fixed/housekeeping args |
-|---|---|---|---|
-| Logistic Regression | (none tuned — defaults used) | Linear baseline; `max_iter=1000` just ensures convergence, not a real hyperparameter | `random_state=42` (reproducibility) |
-| Random Forest | `n_estimators=200` (# trees), `max_depth=10` (tree depth cap) | Bias/variance tradeoff: more trees reduce variance via averaging; capped depth prevents individual trees from memorizing noise | `n_jobs=-1` (use all CPU cores), `random_state=42` |
-| Extra Trees | Same as RF: `n_estimators=200`, `max_depth=10` | Like RF, but splits are chosen randomly rather than by best-split search — trades a bit of per-tree accuracy for much lower correlation between trees, often reducing variance further | same |
-| XGBoost | `n_estimators=200`, `max_depth=6`, `learning_rate=0.05` | Boosting-specific: shallower trees than RF (boosting builds complexity additively), and a conservative learning rate paired with 200 rounds | `objective="multi:softprob"` (3-class probability output), `eval_metric="mlogloss"` (internal loss tracking) |
-| LightGBM | Same trio as XGBoost | Same tradeoffs, different tree-growth algorithm (leaf-wise vs level-wise — LightGBM tends to fit faster on large data) | `objective="multiclass"` |
-| CatBoost | `iterations=200` (=n_estimators), `depth=6`, `learning_rate=0.05` | Same boosting logic; CatBoost's distinguishing feature (ordered boosting, native categorical handling) isn't relevant here since all your features are numeric | `loss_function="MultiClass"` |
-| Gradient Boosting (sklearn) | `n_estimators=100`, `max_depth=5`, `learning_rate=0.05` | sklearn's native (slower) boosting implementation — same concept as XGBoost, fewer rounds since it's the most compute-expensive of the boosters (71s vs XGBoost's 5s observed in Step 10) | — |
-| AdaBoost | `n_estimators=100`, `learning_rate=0.05` | Reweights misclassified samples each round rather than fitting residuals — a different, older boosting mechanism. No `max_depth` because it boosts decision stumps by default (depth-1 trees) | — |
-| SVC (RBF) | (kernel fixed, no C/gamma tuned) | `kernel="rbf"` picks a nonlinear decision boundary; `C` and `gamma` — the two hyperparameters that actually matter most for SVM performance — are left at sklearn defaults (`C=1.0`, `gamma="scale"`), meaning this model is essentially untuned out of the box | `probability=True` (enables `.predict_proba()`, deprecated in recent sklearn — costly, since it fits an internal calibration model on top) |
-| KNN | `n_neighbors=15` | Only real hyperparameter for KNN; 15 is a reasonable default but arbitrary | `n_jobs=-1` |
+The resulting model is stored in MLflow and can later be loaded by the online FastAPI service.
 
-**Note:** as shipped, none of the 10 models are hyperparameter-tuned — this table describes hand-picked defaults, not search results. `train_all_models()` fits every model with **balanced sample weights** (`compute_sample_weight("balanced", ...)`) to correct for the Neutral-class imbalance inherited from Step 2; KNN is the one exception, since `KNeighborsClassifier.fit()` doesn't accept `sample_weight` and is skipped with a logged warning rather than crashing the run.
-
-### Preprocessing and split logic
-
-- `chronological_train_val_test_split()` splits by row position (never shuffled — shuffling would leak adjacent rolling-window information across the boundary), producing train → val → test in strict time order, so the test set represents the most recent, truly unseen period.
-- `fit_preprocessor()` builds a `ColumnTransformer` (median imputer → `StandardScaler`) fit only on `X_train`'s **numeric columns** — non-numeric columns like `open_time` are automatically excluded, so no manual column-dropping is needed.
-
-### What the file returns
-
-`ModelTrainingPipeline.run(X, y)` returns a dict:
-
-- `best_model_name` — the model with the highest validation macro F1
-- `best_model` — the fitted estimator object itself
-- `preprocessor` — the fitted `ColumnTransformer`
-- `val_results` — the full 10-model comparison table (sorted best-first)
-- `test_metrics` — `{"test_accuracy": ..., "test_f1_macro": ...}` from the **one-time** held-out test evaluation
-- `run_id` — the MLflow run ID everything above was logged under (params + metrics), which `model_registry.py` uses to register the model
+This separation also makes experiments reproducible and allows different versions of a model to be tracked over time.
 
 ---
 
-## 5. `model_registry.py` — `ModelRegistry`
+# Current MVP Configuration
 
-### What it does
+The current MVP focuses on Bitcoin and a short-term prediction horizon.
 
-Wraps MLflow's Model Registry client operations into one class, so the rest of the pipeline doesn't have to talk to `MlflowClient` directly. It manages the lifecycle of a **named, versioned model** through MLflow's stage system:
+| Configuration              | Current value         |
+| -------------------------- | --------------------- |
+| Trading pair               | `BTCUSDT`             |
+| Candle interval            | `15m`                 |
+| Default prediction horizon | `30m`                 |
+| Target threshold           | `0.002` / 0.2%        |
+| Validation set             | 15%                   |
+| Test set                   | 15%                   |
+| Training set               | 70%                   |
+| Prediction classes         | Bear / Neutral / Bull |
+| Experiment tracker         | MLflow                |
+| Orchestrator               | Prefect               |
 
-- `register_model(run_id)` — takes a model already logged inside an MLflow run (via `mlflow.sklearn.log_model(...)`) and registers it as a new numbered version under `self.model_name`.
-- `transition_to_staging(run_id, description, tags)` — moves a version into the `Staging` stage, attaching a human-readable description and optional metadata tags (e.g. validation scores).
-- `transition_to_production(version)` — promotes a version to `Production`, and **automatically archives whatever was previously in `Production`** first, so there's only ever one active production version at a time.
-- `get_model_by_stage(stage)` / `get_all_versions()` — read-only lookups used both by `print_registry_status()` (a human-readable console summary) and by `model_deployment.py` to find the currently-deployed version.
-- `get_deployment_uri(stage)` — builds the `models:/{name}/{stage}` URI string that MLflow's `load_model()` functions expect.
-
-**Note on the uploaded `model_deployment.py`:** it imports `load_best_model_pointer`, `load_preprocessor`, and `load_model` from `model_registry` — none of which exist in the `model_registry.py` shown here (that file only defines the `MLflowConfig` dataclass and `ModelRegistry` class). This suggests either an earlier, file/joblib-based registry implementation (a "pointer" JSON file naming the current best model, plus separately joblib-dumped preprocessor/model files) that predates the MLflow-based version, or a registry module still to be written. These two files as currently uploaded are **not compatible with each other** — resolving that mismatch (either by adding the three missing functions to `model_registry.py`, or rewriting `model_deployment.py` to use `ModelRegistry`'s MLflow-based methods instead) is a prerequisite before deployment will actually run.
-
-### What the file returns
-
-`ModelRegistry`'s methods don't return a single "pipeline output" the way the earlier stages do — each method returns what its specific registry action produces:
-
-- `register_model()` → the new version number (`str`) or `None` on failure
-- `transition_to_staging()` → the version number that was transitioned, or `None`
-- `transition_to_production()` → `True`/`False` success flag
-- `get_model_by_stage()` → a single `ModelVersion` object or `None`
-- `get_all_versions()` → a list of `ModelVersion` objects, sorted oldest→newest
-- `get_deployment_uri()` → a `models:/{name}/{stage}` string, ready to hand to `mlflow.sklearn.load_model()`
+The pipeline is configurable, so other symbols, date ranges, and horizons can be supplied through the command line.
 
 ---
 
-## 6. `model_deployment.py` — `Predictor`
+# Pipeline Architecture
 
-### What it does
+The Prefect flow consists of six main stages:
 
-The inference-time entry point — where a trained, registered model actually gets used to make predictions on new data. `Predictor.__init__` loads three things needed for inference (currently via the not-yet-defined registry functions flagged above): a "pointer" describing which model is currently marked best, the fitted preprocessor, and the model itself.
+```text
+1. acquire-data
+        ↓
+2. preprocess-data
+        ↓
+3. engineer-features
+        ↓
+4. align-and-save
+        ↓
+5. train-and-evaluate
+        ↓
+6. deploy-model
+```
 
-`predict(X_new)`:
-1. Runs `X_new` (raw, unscaled feature rows — same schema as what `FeatureEngineer` + alignment produce) through the loaded preprocessor.
-2. Runs the transformed features through the model, getting predictions in the `{0, 1, 2}` training label space.
-3. Maps predictions back to the original, human-meaningful `{-1, 0, 1}` (Bear/Neutral/Bull) space via `INVERSE_LABEL_MAP` from `model_training.py` — callers never see the internal `{0,1,2}` encoding.
+Each stage is implemented as a Prefect task.
 
-`predict_proba(X_new)` does the same but returns class probabilities instead of hard labels, for any downstream use that wants confidence scores rather than a single decision — with an explicit check that raises if the loaded model doesn't support `predict_proba` (not every model in the bench does).
+The main flow is defined in:
 
-### What the file returns
+```text
+flow.py
+```
 
-- `Predictor.predict(X_new)` → a NumPy array of `{-1, 0, 1}` labels, one per input row
-- `Predictor.predict_proba(X_new)` → a NumPy array of shape `(n_rows, 3)`, class probabilities in `{Bear, Neutral, Bull}` training order
-- The module-level `predict(X_new, model_dir)` convenience function → same as `Predictor.predict()`, for one-off calls where a caller doesn't need to keep the loaded model in memory
+The command-line entry point is:
 
----
-
-## 7. `flow.py` — Prefect orchestration
-
-### What it does
-
-Defines the end-to-end pipeline as a Prefect `@flow`, composed of five `@task`-decorated stages that wrap the classes/functions described above:
-
-1. **`acquire-data`** (`retries=3`, `retry_delay_seconds=10`, `timeout_seconds=600`) — wraps `BinanceDataAcquisition.run()`. Generous retry budget because this is the one stage doing real network I/O against an external host.
-2. **`preprocess-data`** (`retries=1`) — wraps `DataPreprocessor.run()`, called with the in-memory DataFrame from Step 1 rather than re-reading from disk.
-3. **`engineer-features`** (`retries=1`) — wraps `FeatureEngineer.fit_transform()`.
-4. **`align-and-save`** (`retries=1`) — wraps `align_features_and_target()`, then persists the final `X`/`y` to parquet **and** returns the in-memory DataFrames directly to the next task (so the training stage doesn't need a redundant disk round-trip).
-5. **`train-and-evaluate`** (`retries=1`) — wraps `ModelTrainingPipeline.run()`, with `tracking_uri` pulled from `config.mlflow.tracking_uri` at module load time.
-
-Dependencies between tasks aren't declared explicitly — Prefect infers them from how return values of one task are passed as arguments into the next (e.g. `preprocess_data(raw_df=df_raw, ...)` implies `preprocess-data` can't start until `acquire-data` finishes). The `@flow`-decorated `binance_ml_pipeline()` function is the orchestrator that calls all five tasks in sequence and logs a final summary.
-
-### What the file returns
-
-`binance_ml_pipeline(...)` returns a 3-tuple: **`(x_path, y_path, training_result)`** — the on-disk paths to the final feature/target parquet files, plus the full result dict from `ModelTrainingPipeline.run()` (best model, its metrics, the MLflow run ID, etc).
+```text
+main.py
+```
 
 ---
 
-## 8. `main.py` — CLI entry point
+# 1. Data Acquisition
 
-### What it does
+### File
 
-The script users actually run (`python main.py [options]`). It:
+```text
+src/Data/data_acquisition.py
+```
 
-1. Configures root Python logging (`configure_logging()`) so that plain `logging.getLogger(__name__)` calls inside `DataPreprocessor`/`FeatureEngineer` (which don't use Prefect's `get_run_logger()`) still print to the console — Prefect's own task-level logging works independently of this.
-2. Parses CLI arguments (`parse_args()`) covering every configurable aspect of a run: symbol, interval, date range, output directories, target threshold, horizon, val/test split ratios, and log level.
-3. Calls `binance_ml_pipeline(...)`, passing through every parsed argument.
-4. Logs a final human-readable summary: output paths, the winning model's name, its test accuracy/F1, and the MLflow run ID it was logged under — everything needed to go find that run in the MLflow UI afterward.
+### Class
 
-### What the file returns
+```python
+BinanceDataAcquisition
+```
 
-`main()` doesn't return a value (it's a script entry point) — its output is entirely side-effecting: console log lines, the parquet files written by the flow, and the MLflow run created by `ModelTrainingPipeline`. Running `python main.py` end-to-end is the trigger for the entire chain described above, from a fresh Binance download through to a registered, evaluated model.
+The acquisition stage downloads historical market data from **Binance Vision**.
+
+Instead of requesting individual candles one by one, the pipeline constructs monthly Binance Vision archive URLs.
+
+For example:
+
+```text
+BTCUSDT + 15m + January 2023
+        ↓
+BTCUSDT-15m-2023-01.zip
+```
+
+The downloaded ZIP contains the historical candlestick CSV data.
+
+### Data flow
+
+```text
+Binance Vision
+      │
+      ▼
+Monthly ZIP files
+      │
+      ▼
+CSV
+      │
+      ▼
+Pandas DataFrame
+      │
+      ▼
+Timestamp/type processing
+      │
+      ▼
+Monthly DataFrames
+      │
+      ▼
+Concatenation
+      │
+      ▼
+Sort + deduplicate
+      │
+      ▼
+Parquet
+```
+
+The resulting raw dataset is stored under:
+
+```text
+data/raw/
+```
+
+Example:
+
+```text
+data/raw/BTCUSDT_15m_raw.parquet
+```
+
+### Data columns
+
+The Binance candlestick data contains:
+
+* `open_time`
+* `open`
+* `high`
+* `low`
+* `close`
+* `volume`
+* `close_time`
+* `quote_asset_volume`
+* `number_of_trades`
+* `taker_buy_base_asset_volume`
+* `taker_buy_quote_asset_volume`
+* `ignore`
+
+The acquisition stage also handles Binance timestamp formats and converts the timestamps into Pandas datetime values.
+
+---
+
+# 2. Data Preprocessing
+
+### File
+
+```text
+src/Data/data_preprocessing.py
+```
+
+### Class
+
+```python
+DataPreprocessor
+```
+
+This stage performs ETL, validation, cleaning, and **target creation**.
+
+The order is deliberate:
+
+```text
+Validate
+   ↓
+Sort
+   ↓
+Deduplicate
+   ↓
+Handle missing values
+   ↓
+Create target
+   ↓
+Remove rows without future labels
+```
+
+---
+
+## Data Validation
+
+The pipeline verifies that:
+
+* `open_time` is a valid datetime
+* numerical market columns are numeric
+* timestamps are converted correctly
+
+It also contains logic for detecting whether timestamps are represented in milliseconds or microseconds.
+
+---
+
+## Chronological Ordering
+
+Financial time-series data must remain ordered by time.
+
+The pipeline sorts by:
+
+```text
+open_time
+```
+
+and removes duplicate timestamps.
+
+This is important because later stages use previous and future observations.
+
+---
+
+## Missing Values
+
+The pipeline handles missing values using **forward filling**:
+
+```python
+df[self.core_cols] = df[self.core_cols].ffill()
+```
+
+Forward filling uses information from earlier observations rather than future observations.
+
+This helps avoid introducing future information into historical rows.
+
+---
+
+# Target Creation
+
+The target is created during preprocessing rather than feature engineering.
+
+This is an important design decision.
+
+The target depends only on the current and future `close` prices:
+
+```text
+Current close
+      │
+      │
+      └──────────────► Future close
+                           │
+                           ▼
+                     Future return
+                           │
+                           ▼
+                    Bull / Neutral / Bear
+```
+
+The future return is:
+
+```text
+future_return =
+    (future_close - current_close) / current_close
+```
+
+For the default configuration:
+
+```text
+interval = 15m
+horizon  = 30m
+```
+
+Therefore:
+
+```text
+30 minutes / 15 minutes = 2 periods
+```
+
+The pipeline uses:
+
+```python
+future_close = close.shift(-2)
+```
+
+---
+
+# Target Classes
+
+The default threshold is:
+
+```text
+0.002 = 0.2%
+```
+
+The target is defined as:
+
+|          Future return | Class | Meaning |
+| ---------------------: | ----: | ------- |
+|            `>= +0.002` |   `1` | Bull    |
+|            `<= -0.002` |  `-1` | Bear    |
+| Between the thresholds |   `0` | Neutral |
+
+Therefore:
+
+```text
+-1 → Bear
+ 0 → Neutral
+ 1 → Bull
+```
+
+Rows at the end of the dataset that do not have enough future data to calculate the target are removed.
+
+### Why?
+
+Suppose the final candle is:
+
+```text
+2024-01-01 23:45
+```
+
+There is no candle 30 minutes into the future inside the dataset.
+
+Therefore its target cannot be calculated and the row cannot be used for supervised training.
+
+---
+
+# Horizon Validation
+
+The preprocessing class validates the relationship between the candle interval and prediction horizon.
+
+For example:
+
+```text
+15m interval + 30m horizon
+        ✓ valid
+
+15m interval + 1h horizon
+        ✓ valid
+
+15m interval + 45m horizon
+        ✓ valid
+
+15m interval + 20m horizon
+        ✗ invalid
+```
+
+The horizon must be:
+
+1. Positive
+2. At least as large as the candle interval
+3. An exact multiple of the candle interval
+
+This guarantees that the future target can be represented as a whole number of candles.
+
+---
+
+# 3. Feature Engineering
+
+### File
+
+```text
+src/Features/feature_engineering.py
+```
+
+### Class
+
+```python
+FeatureEngineer
+```
+
+Feature engineering transforms raw market information into numerical signals that the machine-learning models can use.
+
+The current MVP uses price, momentum, trend, volatility, and volume-based features.
+
+```text
+Raw OHLCV data
+      │
+      ▼
+Feature Engineering
+      │
+      ├── Returns
+      ├── Volatility
+      ├── EMA
+      ├── RSI
+      └── Volume indicators
+      │
+      ▼
+Feature matrix X
+```
+
+---
+
+# Current Features
+
+| Feature            | Calculation / Meaning                                    |
+| ------------------ | -------------------------------------------------------- |
+| `return_1`         | Percentage change over one candle                        |
+| `return_3`         | Percentage change over three candles                     |
+| `volatility_10`    | Rolling standard deviation of `return_1` over 10 candles |
+| `ema_20`           | 20-period exponential moving average                     |
+| `ema_50`           | 50-period exponential moving average                     |
+| `dist_from_ema_20` | Relative distance between price and EMA-20               |
+| `rsi_14`           | 14-period Relative Strength Index                        |
+| `volume_sma_20`    | 20-period rolling average volume                         |
+| `volume_ratio`     | Current volume relative to average volume                |
+
+---
+
+# Why Feature Engineering Comes Before Model Training
+
+The raw candle data contains information such as:
+
+```text
+open
+high
+low
+close
+volume
+```
+
+A machine-learning model can use these values directly, but derived features can provide additional representations of recent market behavior.
+
+For example:
+
+```text
+close
+ │
+ ├── return
+ ├── EMA
+ ├── distance from EMA
+ ├── RSI
+ └── volatility
+```
+
+The goal is to provide the models with multiple numerical descriptions of recent price and volume behavior.
+
+---
+
+# Feature Warm-up and Alignment
+
+Some technical indicators require historical observations before they produce valid values.
+
+For example:
+
+```text
+EMA-50
+```
+
+needs an initial period to become established.
+
+Similarly, rolling indicators such as:
+
+```text
+volatility_10
+volume_sma_20
+```
+
+produce NaN values at the beginning.
+
+Therefore, after feature engineering, the pipeline performs:
+
+```text
+Feature Engineering
+        ↓
+Rows containing NaN
+        ↓
+Remove invalid warm-up rows
+        ↓
+Reset X/y indexes
+```
+
+This is handled by:
+
+```python
+align_features_and_target()
+```
+
+The target is aligned with exactly the same rows that remain in the feature matrix.
+
+---
+
+# 4. Train / Validation / Test Split
+
+### File
+
+```text
+src/Models/model_training.py
+```
+
+The pipeline uses a **chronological split**, not a random split.
+
+Default:
+
+```text
+70% → Training
+15% → Validation
+15% → Test
+```
+
+The order is preserved:
+
+```text
+Past                                              Future
+│                                                   │
+├──────────────┬─────────────┬─────────────────────┤
+│    Train     │ Validation  │        Test         │
+│     70%      │     15%     │         15%         │
+└──────────────┴─────────────┴─────────────────────┘
+```
+
+### Why no shuffling?
+
+Financial time-series observations are temporally related.
+
+Randomly mixing observations could allow information from later periods to influence earlier training decisions.
+
+A chronological split better represents the real deployment situation:
+
+> Train on the past → validate on a later period → test on an even later unseen period.
+
+---
+
+# 5. Preprocessing Before Modeling
+
+The model-training pipeline automatically selects numeric features.
+
+The preprocessing pipeline is:
+
+```text
+Numerical Features
+       │
+       ▼
+SimpleImputer
+(median)
+       │
+       ▼
+StandardScaler
+       │
+       ▼
+Machine Learning Model
+```
+
+The preprocessor is **fitted only on the training set**.
+
+```text
+X_train
+   │
+   └── fit + transform
+
+X_validation
+   │
+   └── transform only
+
+X_test
+   │
+   └── transform only
+```
+
+This prevents information from the validation or test sets from influencing the preprocessing parameters.
+
+---
+
+# 6. Model Benchmarking
+
+The pipeline evaluates multiple machine-learning algorithms.
+
+Current candidates:
+
+| Model               | General approach                                      |
+| ------------------- | ----------------------------------------------------- |
+| Logistic Regression | Linear classification model                           |
+| Random Forest       | Ensemble of randomized decision trees                 |
+| Extra Trees         | Highly randomized tree ensemble                       |
+| XGBoost             | Gradient-boosted decision trees                       |
+| LightGBM            | Efficient gradient boosting                           |
+| CatBoost            | Gradient boosting designed to handle complex patterns |
+| Gradient Boosting   | Sequentially improved decision trees                  |
+| AdaBoost            | Sequentially focuses on difficult observations        |
+| SVC (RBF)           | Kernel-based classifier                               |
+| KNN                 | Classifies using nearby observations                  |
+
+The objective is not to assume that one algorithm is universally suitable.
+
+Instead:
+
+```text
+Same training data
+       │
+       ├── Logistic Regression
+       ├── Random Forest
+       ├── Extra Trees
+       ├── XGBoost
+       ├── LightGBM
+       ├── CatBoost
+       ├── Gradient Boosting
+       ├── AdaBoost
+       ├── SVC
+       └── KNN
+              │
+              ▼
+        Compare validation
+           performance
+```
+
+---
+
+# Class Balancing
+
+The training data uses balanced sample weights:
+
+```python
+compute_sample_weight("balanced", y_train)
+```
+
+This gives more weight to classes that appear less frequently.
+
+The purpose is to reduce the influence of class imbalance during training.
+
+The same weighting is applied to the candidate models that support `sample_weight`.
+
+Models that do not support the supplied training interface are skipped and logged rather than stopping the entire pipeline.
+
+---
+
+# Model Selection
+
+Models are compared using the validation set.
+
+The primary selection metric is:
+
+```text
+Macro F1
+```
+
+The validation results include:
+
+* Model name
+* Training time
+* Validation accuracy
+* Validation macro F1
+
+The results are sorted by validation macro F1.
+
+The highest validation macro-F1 model is selected as the candidate model.
+
+---
+
+# Why Macro F1?
+
+This is a three-class classification problem:
+
+```text
+Bear
+Neutral
+Bull
+```
+
+Accuracy alone can hide poor performance on an individual class, particularly when the classes are imbalanced.
+
+Macro F1 calculates F1 for each class and then gives each class equal importance.
+
+Conceptually:
+
+```text
+Macro F1 =
+(F1_Bear + F1_Neutral + F1_Bull) / 3
+```
+
+This makes it useful for evaluating performance across all three directional classes.
+
+---
+
+# Test Evaluation
+
+The test set is deliberately kept separate from model selection.
+
+The process is:
+
+```text
+Training set
+     ↓
+Train all models
+     ↓
+Validation set
+     ↓
+Select best model
+     ↓
+Test set
+     ↓
+Final evaluation
+```
+
+The test set is evaluated **once after model selection**.
+
+This prevents the test set from gradually becoming another validation set.
+
+Final metrics include:
+
+```text
+Test Accuracy
+Test Macro F1
+```
+
+---
+
+# MLflow Experiment Tracking
+
+MLflow records the training experiments.
+
+The configured experiment is:
+
+```text
+binance-ml-pipeline
+```
+
+The pipeline records information such as:
+
+### Parameters
+
+```text
+model_name
+symbol
+horizon
+val_ratio
+test_ratio
+```
+
+### Metrics
+
+```text
+val_accuracy
+val_f1_macro
+train_time_s
+test_accuracy
+test_f1_macro
+```
+
+### Tags
+
+The final model is tagged with:
+
+```text
+final_model=true
+deployment_ready=true
+```
+
+This allows experiments and model versions to be inspected later rather than relying only on terminal output.
+
+---
+
+# MLflow Model Registry
+
+The trained model is registered using a symbol-and-horizon-specific name.
+
+Naming convention:
+
+```text
+{SYMBOL}_{HORIZON}_classifier
+```
+
+Examples:
+
+```text
+BTCUSDT_15m_classifier
+BTCUSDT_30m_classifier
+BTCUSDT_1h_classifier
+BTCUSDT_4h_classifier
+BTCUSDT_1d_classifier
+```
+
+This keeps different prediction problems separate.
+
+For example:
+
+```text
+BTCUSDT_30m_classifier
+```
+
+and
+
+```text
+BTCUSDT_4h_classifier
+```
+
+represent different learning problems and have independent model version histories.
+
+---
+
+# Deploy-if-Better Gate
+
+The pipeline includes a deployment gate:
+
+```python
+deploy_if_better()
+```
+
+The logic is:
+
+```text
+New trained model
+       │
+       ▼
+Register
+       │
+       ▼
+Staging
+       │
+       ▼
+Is there a Production model?
+       │
+      / \
+    No   Yes
+    │     │
+    │     ▼
+    │   Compare test F1
+    │     │
+    │     ▼
+    │   Improvement >= 0.01?
+    │      / \
+    │    Yes  No
+    │     │    │
+    ▼     ▼    ▼
+Production  Production  Stay Staging
+```
+
+If there is no existing Production model, the first registered model can become Production.
+
+For subsequent models, the candidate must improve the incumbent's test macro F1 by at least:
+
+```text
+0.01
+```
+
+If it does not, it remains in Staging.
+
+This creates a simple deployment safety gate instead of replacing the Production model after every training run.
+
+---
+
+# Model Artifact
+
+The model logged to MLflow is not only the classifier.
+
+The pipeline bundles:
+
+```text
+Preprocessor
+     +
+Classifier
+     ↓
+Single sklearn Pipeline
+     ↓
+MLflow Model Artifact
+```
+
+Conceptually:
+
+```python
+Pipeline([
+    ("preprocessor", fitted_preprocessor),
+    ("classifier", best_model)
+])
+```
+
+This is important for deployment.
+
+The serving API does not need to manually reconstruct the scaler, imputer, or classifier.
+
+It loads the complete pipeline:
+
+```text
+Raw inference data
+       ↓
+MLflow model
+       ↓
+Preprocessing
+       ↓
+Classifier
+       ↓
+Prediction
+```
+
+The model artifact is stored using the `skops` format.
+
+---
+
+# Prefect Orchestration
+
+### File
+
+```text
+flow.py
+```
+
+Prefect connects the individual tasks into one reproducible workflow.
+
+The flow:
+
+```python
+@flow(name="binance-ml-pipeline")
+```
+
+contains:
+
+```text
+acquire_data()
+       ↓
+preprocess_data()
+       ↓
+engineer_features()
+       ↓
+align_and_save()
+       ↓
+train_and_evaluate()
+       ↓
+deploy_model()
+```
+
+Tasks also have retry and timeout configuration.
+
+For example, data acquisition uses:
+
+```text
+retries = 3
+retry delay = 10 seconds
+timeout = 600 seconds
+```
+
+This is particularly useful for network-dependent operations such as downloading Binance data.
+
+---
+
+# Command-Line Interface
+
+### File
+
+```text
+main.py
+```
+
+`main.py` provides a command-line interface around the Prefect flow.
+
+### Basic execution
+
+```bash
+python main.py
+```
+
+This uses the default configuration:
+
+```text
+BTCUSDT
+15m candles
+30m prediction horizon
+2023-01 → 2024-01
+15% validation
+15% test
+0.002 target threshold
+```
+
+---
+
+## Change the Trading Pair
+
+```bash
+python main.py --symbol ETHUSDT
+```
+
+---
+
+## Change the Prediction Horizon
+
+```bash
+python main.py --horizon 1h
+```
+
+The horizon must be compatible with the selected candle interval.
+
+---
+
+## Change the Target Threshold
+
+```bash
+python main.py --target-threshold 0.003
+```
+
+This changes the threshold from:
+
+```text
+0.2%
+```
+
+to:
+
+```text
+0.3%
+```
+
+---
+
+## Change the Date Range
+
+```bash
+python main.py \
+  --start-year 2022 \
+  --start-month 1 \
+  --end-year 2024 \
+  --end-month 1
+```
+
+---
+
+## Change Validation/Test Ratios
+
+```bash
+python main.py \
+  --val-ratio 0.20 \
+  --test-ratio 0.10
+```
+
+This produces:
+
+```text
+70% Train
+20% Validation
+10% Test
+```
+
+---
+
+# Output Data
+
+The pipeline stores intermediate datasets under:
+
+```text
+data/
+├── raw/
+├── processed/
+└── features/
+```
+
+### Raw
+
+```text
+data/raw/
+└── BTCUSDT_15m_raw.parquet
+```
+
+Contains the downloaded and combined Binance market data.
+
+### Processed
+
+```text
+data/processed/
+└── cleaned_data.parquet
+```
+
+Contains cleaned data and target information.
+
+### Features
+
+```text
+data/features/
+├── X_final.parquet
+└── y_final.parquet
+```
+
+`X_final.parquet` contains the final model features.
+
+`y_final.parquet` contains the aligned target labels.
+
+---
+
+# Directory Structure
+
+```text
+3_Pipeline/
+│
+├── config/
+│   ├── config.py
+│   └── __init__.py
+│
+├── data/
+│   ├── raw/
+│   │   └── BTCUSDT_15m_raw.parquet
+│   │
+│   ├── processed/
+│   │   ├── cleaned_data.parquet
+│   │   └── cleaned_dummy_path.parquet
+│   │
+│   └── features/
+│       ├── X_final.parquet
+│       └── y_final.parquet
+│
+├── src/
+│   ├── Data/
+│   │   ├── data_acquisition.py
+│   │   └── data_preprocessing.py
+│   │
+│   ├── Features/
+│   │   └── feature_engineering.py
+│   │
+│   ├── Models/
+│   │   ├── model_training.py
+│   │   └── model_registry.py
+│   │
+│   └── Utils/
+│       ├── logging_utils.py
+│       └── retry_utils.py
+│
+├── flow.py
+├── main.py
+│
+├── mlflow_binance.db
+├── mlartifacts/
+├── models/
+├── logs/
+├── catboost_info/
+│
+└── README.md
+```
+
+---
+
+# Role of Each Source File
+
+| File                     | Responsibility                                                   |
+| ------------------------ | ---------------------------------------------------------------- |
+| `flow.py`                | Prefect orchestration                                            |
+| `main.py`                | Command-line entry point                                         |
+| `config/config.py`       | Central configuration                                            |
+| `data_acquisition.py`    | Downloads and prepares Binance Vision data                       |
+| `data_preprocessing.py`  | Validates, cleans, and creates targets                           |
+| `feature_engineering.py` | Calculates technical features                                    |
+| `model_training.py`      | Splits data, preprocesses, trains, evaluates, and selects models |
+| `model_registry.py`      | Handles MLflow registration and model stage transitions          |
+| `logging_utils.py`       | Logging utilities                                                |
+| `retry_utils.py`         | Retry-related utilities                                          |
+
+---
+
+# Complete Data Flow
+
+The complete pipeline can be summarized as:
+
+```text
+                    ┌─────────────────────┐
+                    │   Binance Vision    │
+                    │   Historical Data   │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │  Data Acquisition   │
+                    │  Download + Combine  │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Data Preprocessing  │
+                    │ Validate + Clean    │
+                    │ Create Target       │
+                    └──────────┬──────────┘
+                               │
+                         X + y │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Feature Engineering │
+                    │ Returns / EMA / RSI │
+                    │ Volatility / Volume │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Align X and y       │
+                    │ Remove warm-up NaNs │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Chronological Split │
+                    │ 70 / 15 / 15        │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Preprocessing       │
+                    │ Imputer + Scaler    │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+          ┌─────────────────────────────────────────┐
+          │             Model Benchmark             │
+          │                                         │
+          │ LR | RF | ET | XGB | LGBM | CatBoost   │
+          │ GB | AdaBoost | SVC | KNN               │
+          └──────────────────────┬──────────────────┘
+                                 │
+                                 ▼
+                    ┌─────────────────────┐
+                    │ Validation F1       │
+                    │ Model Selection     │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Final Test          │
+                    │ Accuracy + Macro F1 │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ MLflow              │
+                    │ Tracking + Registry │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Deployment Gate     │
+                    │ Staging / Production│
+                    └─────────────────────┘
+```
+
+---
+
+# Reproducibility and Leakage Prevention
+
+Several design decisions specifically address data leakage.
+
+### 1. Chronological splitting
+
+Data is never randomly shuffled before train/validation/test splitting.
+
+### 2. Training-only preprocessing fit
+
+The imputer and scaler are fitted using the training set only.
+
+### 3. Forward-fill missing values
+
+Missing market values are filled using previous observations rather than future values.
+
+### 4. Target created independently
+
+The target is calculated from future prices and is kept separate from feature engineering.
+
+### 5. Future target columns are removed from X
+
+The following columns never enter the model:
+
+```text
+future_close
+future_return
+target
+```
+
+### 6. Test set used only after model selection
+
+The test set is evaluated only after the validation set has selected the final candidate.
+
+These controls are particularly important for financial time-series problems because seemingly small leakage errors can produce misleadingly optimistic results.
+
+---
+
+# MLflow Storage
+
+The training pipeline uses its own MLflow tracking environment.
+
+The local training artifacts include:
+
+```text
+mlflow_binance.db
+mlartifacts/
+```
+
+Conceptually:
+
+```text
+MLflow Database
+      │
+      ├── Experiments
+      ├── Runs
+      ├── Parameters
+      ├── Metrics
+      └── Model Registry metadata
+
+MLflow Artifacts
+      │
+      └── Trained model files
+```
+
+The deployment environment may use a **separate MLflow instance/database**.
+
+The trained model therefore does not automatically appear in the deployment registry simply because it was trained here.
+
+A controlled migration/registration step is used when moving a selected model into the deployment environment.
+
+---
+
+# Relationship With Online Deployment
+
+This pipeline is responsible for producing the model.
+
+The online deployment is responsible for serving it.
+
+```text
+3_Pipeline
+──────────
+Historical data
+      ↓
+Training
+      ↓
+Evaluation
+      ↓
+MLflow
+      ↓
+Registered model
+      │
+      │ migration / deployment
+      ▼
+4_Deploy_Online
+───────────────
+MLflow Production model
+      ↓
+FastAPI
+      ↓
+Live prediction
+```
+
+The online API does not retrain models.
+
+It loads the model that has been selected for Production and applies it to newly retrieved market data.
+
+---
+
+# Current Example
+
+For the current MVP, the pipeline produced a model registered as:
+
+```text
+BTCUSDT_30m_classifier
+```
+
+The model selected for the current 30-minute workflow is an AdaBoost classifier.
+
+The training and evaluation metrics are tracked in MLflow rather than being treated as hardcoded values in the deployment code.
+
+The resulting registered model can then be moved into the separate deployment environment and promoted to Production.
+
+---
+
+# Future Pipeline Improvements
+
+The pipeline architecture is designed to grow with the project.
+
+Potential improvements include:
+
+### Data
+
+* Additional cryptocurrencies
+* Additional trading pairs
+* More historical periods
+* Additional market data sources
+* Automated incremental data updates
+
+### Features
+
+* MACD
+* ATR / NATR
+* Bollinger Bands
+* EMA-200 relationships
+* Additional RSI periods
+* More volume indicators
+* Market-wide features
+* Order-book features
+
+### Modeling
+
+* Hyperparameter optimization
+* Feature selection
+* Probability calibration
+* Ensemble optimization
+* Time-series cross-validation
+* More specialized temporal models
+
+### MLOps
+
+* Scheduled retraining
+* Automated data-quality checks
+* Data drift monitoring
+* Model drift monitoring
+* Automated experiment comparison
+* CI/CD integration
+* Model rollback
+* Improved registry alias management
+
+---
+
+# Important Notes
+
+### This is a prediction system, not a trading bot
+
+The pipeline predicts:
+
+```text
+Bear / Neutral / Bull
+```
+
+It does not execute trades.
+
+### Predictions are not guarantees
+
+Financial markets are noisy and affected by many factors that are not represented in the current feature set.
+
+Model performance on historical data therefore does not guarantee future performance.
+
+### MVP scope is intentionally limited
+
+The current implementation focuses on:
+
+```text
+BTCUSDT
++
+15-minute candles
++
+30-minute prediction horizon
+```
+
+The architecture supports expansion to additional symbols and horizons as the project develops.
+
+---
+
+# Running the Pipeline
+
+From this directory:
+
+```bash
+cd 3_Pipeline
+```
+
+Run with defaults:
+
+```bash
+python main.py
+```
+
+Run with custom configuration:
+
+```bash
+python main.py \
+  --symbol BTCUSDT \
+  --interval 15m \
+  --start-year 2023 \
+  --start-month 1 \
+  --end-year 2024 \
+  --end-month 1 \
+  --target-threshold 0.002 \
+  --horizon 30m \
+  --val-ratio 0.15 \
+  --test-ratio 0.15
+```
+
+The Prefect flow can also be invoked directly through:
+
+```bash
+python flow.py
+```
+
+---
+
+# Pipeline Summary
+
+The pipeline follows a clear MLOps lifecycle:
+
+```text
+ACQUIRE
+   ↓
+Historical Binance data
+
+PREPROCESS
+   ↓
+Clean data + target
+
+FEATURE ENGINEER
+   ↓
+Market features
+
+SPLIT
+   ↓
+Chronological train / validation / test
+
+TRAIN
+   ↓
+10 candidate classifiers
+
+SELECT
+   ↓
+Best validation Macro F1
+
+TEST
+   ↓
+Final unseen evaluation
+
+TRACK
+   ↓
+MLflow experiment
+
+REGISTER
+   ↓
+Versioned model
+
+DEPLOY GATE
+   ↓
+Staging → Production when criteria are met
+```
+
+The result is a **versioned, reproducible, deployment-ready machine-learning model** that can be consumed by the project's online inference service.
