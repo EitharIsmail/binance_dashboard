@@ -74,7 +74,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Binance Direction Classifier API", 
               description="Predict baesd on the current price of a BITCOIN whether the price will significuntly go higher, lower or roughly unchanged after the chosen horizon",
     version="1.0.0",
-    lifespan=lifespan)
+    lifespan=lifespan,
+    ROOT_PATH="/api")
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):

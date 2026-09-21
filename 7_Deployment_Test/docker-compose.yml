@@ -8,7 +8,7 @@ services:
     command: >
       mlflow server
       --host 0.0.0.0
-      --port 5000
+      --port 1060
       --backend-store-uri sqlite:////mlflow/mlflow.db
       --default-artifact-root mlflow-artifacts:/
       --artifacts-destination /mlruns
@@ -16,9 +16,9 @@ services:
       --uvicorn-opts "--forwarded-allow-ips=*"
       --allowed-hosts "*"
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_TRACKING_URI=http://mlflow:1060
     ports:
-      - "5000:5000"
+      - "1060:1060"
     volumes:
       - ./mlflow:/mlflow
       - ./mlruns:/mlruns
@@ -33,16 +33,16 @@ services:
       dockerfile: api/Dockerfile
     container_name: binance-api
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_TRACKING_URI=http://mlflow:1060
       - ROOT_PATH=/api
     depends_on:
       - mlflow
     ports:
-      - "8000:8000"
+      - "1061:1061"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
-        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+        "import urllib.request; urllib.request.urlopen('http://localhost:1061/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -56,20 +56,20 @@ services:
       context: ./dashboard
     container_name: binance-dashboard
     environment:
-      - ONLINE_API=http://api:8000
+      - ONLINE_API=http://api:1061
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
-      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_PORT=1063
       - STREAMLIT_SERVER_ADDRESS=0.0.0.0
     depends_on:
       - api
     ports:
-      - "8501:8501"
+      - "1063:1063"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
-        "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+        "import urllib.request; urllib.request.urlopen('http://localhost:1063/_stcore/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
