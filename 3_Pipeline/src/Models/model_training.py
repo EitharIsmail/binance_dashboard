@@ -22,9 +22,14 @@ from sklearn.ensemble import (
 )
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
+
+import optuna
+from optuna.samplers import TPESampler
+from optuna.pruners import MedianPruner
 
 from config.config import MLflowConfig
 
@@ -253,6 +258,135 @@ def evaluate_on_test(model, X_test_proc, y_test: pd.Series, run_id: str) -> Dict
 
     return test_metrics
 
+
+# =============================================================================
+# Optuna hyperparameter tuning — top-3 candidates only
+# =============================================================================
+def _tree_ensemble_params(trial):
+    """Shared search space for Random Forest / Extra Trees."""
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=50),
+        "max_depth": trial.suggest_categorical("max_depth", [5, 10, 15, 20, None]),
+        "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+        "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2"]),
+    }
+
+
+def _boosting_params(trial):
+    """Shared search space for XGBoost / LightGBM."""
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=50),
+        "max_depth": trial.suggest_int("max_depth", 3, 9),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+    }
+
+
+def _catboost_params(trial):
+    return {
+        "iterations": trial.suggest_int("iterations", 100, 400, step=50),
+        "depth": trial.suggest_int("depth", 3, 9),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, log=True),
+    }
+
+
+def _gb_params(trial):
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 50, 300, step=25),
+        "max_depth": trial.suggest_int("max_depth", 3, 8),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+    }
+
+
+def _adaboost_params(trial):
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 50, 300, step=25),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 1.0, log=True),
+    }
+
+
+def _logreg_params(trial):
+    return {"C": trial.suggest_float("C", 1e-3, 10.0, log=True), "max_iter": 1000}
+
+
+# Maps each tunable model name -> (param-suggestion fn, model-builder fn).
+# Builders re-attach the fixed/housekeeping args from get_default_models()
+# (random_state, objective, n_jobs, etc.) around the tuned params.
+TUNING_REGISTRY = {
+    "Random Forest": (_tree_ensemble_params, lambda p: RandomForestClassifier(random_state=42, n_jobs=-1, **p)),
+    "Extra Trees": (_tree_ensemble_params, lambda p: ExtraTreesClassifier(random_state=42, n_jobs=-1, **p)),
+    "XGBoost": (_boosting_params, lambda p: XGBClassifier(
+        objective="multi:softprob", eval_metric="mlogloss", random_state=42, n_jobs=-1, verbosity=0, **p)),
+    "LightGBM": (_boosting_params, lambda p: LGBMClassifier(
+        objective="multiclass", random_state=42, n_jobs=-1, verbose=-1, **p)),
+    "CatBoost": (_catboost_params, lambda p: CatBoostClassifier(
+        loss_function="MultiClass", random_state=42, verbose=0, **p)),
+    "Gradient Boosting": (_gb_params, lambda p: GradientBoostingClassifier(random_state=42, **p)),
+    "AdaBoost": (_adaboost_params, lambda p: AdaBoostClassifier(random_state=42, **p)),
+    "Logistic Regression": (_logreg_params, lambda p: LogisticRegression(random_state=42, n_jobs=-1, **p)),
+    # SVC and KNN intentionally omitted: SVC tuning (C, gamma) is expensive
+    # at this dataset size, and KNN's only real hyperparameter (n_neighbors)
+    # is cheap enough to leave at its fixed default.
+}
+
+
+def tune_model(
+    name: str,
+    X_train_proc,
+    y_train_mapped: pd.Series,
+    n_splits: int = 3,
+    n_trials: int = 30,
+) -> Tuple[object, float]:
+    """
+    Runs Optuna TPE search for one model using chronological
+    (TimeSeriesSplit) CV, with per-fold balanced sample weights. Returns
+    (refit_model, best_cv_f1). Raises KeyError if `name` has no entry in
+    TUNING_REGISTRY.
+    """
+    suggest_fn, build_fn = TUNING_REGISTRY[name]
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    def objective(trial):
+        params = suggest_fn(trial)
+        fold_scores = []
+        for fold_i, (tr_idx, va_idx) in enumerate(tscv.split(X_train_proc)):
+            X_tr, X_va = X_train_proc[tr_idx], X_train_proc[va_idx]
+            y_tr, y_va = y_train_mapped.iloc[tr_idx], y_train_mapped.iloc[va_idx]
+
+            weights = compute_sample_weight("balanced", y_tr)
+            model = build_fn(params)
+            model.fit(X_tr, y_tr, sample_weight=weights)
+
+            preds = model.predict(X_va)
+            fold_scores.append(f1_score(y_va, preds, average="macro"))
+            trial.report(np.mean(fold_scores), step=fold_i)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        return float(np.mean(fold_scores))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=TPESampler(seed=42),
+        pruner=MedianPruner(n_warmup_steps=1),
+    )
+    study.optimize(objective, n_trials=n_trials, n_jobs=1)
+
+    # Refit the winning config on the FULL training set (CV folds each
+    # used less data than the full set).
+    final_model = build_fn(study.best_params)
+    full_weights = compute_sample_weight("balanced", y_train_mapped)
+    final_model.fit(X_train_proc, y_train_mapped, sample_weight=full_weights)
+
+    logger.info(f"  {name} tuned -> CV F1={study.best_value:.4f}, params={study.best_params}")
+    return final_model, study.best_value
+
+
+
 # =============================================================================
 # Model Training Pipeline — wraps split -> preprocess -> train -> select -> test
 # =============================================================================
@@ -308,6 +442,45 @@ class ModelTrainingPipeline:
 
         if self.val_results.empty:
             raise RuntimeError("No models trained successfully — nothing to select from.")
+
+        # --- Tune the top 3 baseline models (that have a search space defined) ---
+        y_train_mapped = y_train.map(LABEL_MAP)
+        y_val_mapped = y_val.map(LABEL_MAP)
+
+        top_candidates = [
+            name for name in self.val_results["Model"].head(3) if name in TUNING_REGISTRY
+        ]
+        logger.info(f"🎯 Tuning top {len(top_candidates)} candidates: {top_candidates}")
+
+        tuned_rows = []
+        for name in top_candidates:
+            tuned_model, _ = tune_model(name, X_train_proc, y_train_mapped)
+            preds = tuned_model.predict(X_val_proc)
+            tuned_f1 = f1_score(y_val_mapped, preds, average="macro")
+            tuned_acc = accuracy_score(y_val_mapped, preds)
+
+            baseline_f1 = self.val_results.loc[
+                self.val_results["Model"] == name, "Validation Macro F1"
+            ].iloc[0]
+
+            # Only keep the tuned version if it actually beat its own
+            # untuned baseline -- tuning isn't guaranteed to win.
+            if tuned_f1 > baseline_f1:
+                tuned_name = f"{name} (Tuned)"
+                fitted_models[tuned_name] = {"model": tuned_model, "train_time": 0.0}
+                tuned_rows.append({
+                    "Model": tuned_name, "Train Time (s)": 0.0,
+                    "Validation Accuracy": round(tuned_acc, 4),
+                    "Validation Macro F1": round(tuned_f1, 4),
+                })
+                logger.info(f"   ✅ {name}: tuned beat baseline ({tuned_f1:.4f} > {baseline_f1:.4f})")
+            else:
+                logger.info(f"   ⚠️ {name}: tuning did not beat baseline ({tuned_f1:.4f} <= {baseline_f1:.4f})")
+
+        if tuned_rows:
+            self.val_results = pd.concat(
+                [self.val_results, pd.DataFrame(tuned_rows)], ignore_index=True
+            ).sort_values(by="Validation Macro F1", ascending=False).reset_index(drop=True)
 
         best_row = self.val_results.iloc[0]
         self.best_model_name = best_row["Model"]

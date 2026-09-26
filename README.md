@@ -14,6 +14,20 @@ This project explores how machine learning can help reduce that information over
 
 ---
 
+## 🎓 Project Context — SAIR MLOps
+
+This project was developed as part of my learning and engineering work in the **SAIR Jr. MLOps module**.
+
+The SAIR Jr. curriculum describes its MLOps module around production ML-system skills including **containerization, FastAPI, MLflow, data pipelines, CI/CD, and monitoring**.
+
+Useful references:
+
+- **SAIR:** https://github.com/SAIR-Org
+- **SAIR Jr.:** https://github.com/SAIR-Org/SAIR_Jr
+- **SAIR MLOps:** https://github.com/SAIR-Org/SAiR-MLOps
+
+---
+
 # The Problem
 
 When trading Bitcoin on Binance, users are exposed to a large amount of information:
