@@ -1,0 +1,36 @@
+name: CI/CD
+
+# ── EVENT ── what triggers this workflow
+on:
+  push:
+    branches:
+      - main              # runs whenever anything is pushed to main
+
+jobs:
+  deploy:                  # ── JOB ── a unit of work
+    runs-on: ubuntu-latest # spins up a fresh, isolated Ubuntu VM for this job
+
+    steps:                 # ── STEPS ── run sequentially, top to bottom
+      - uses: actions/checkout@v4
+        # clones YOUR repo onto the runner VM (not your VPS -- this is a
+        # separate, temporary machine GitHub just created)
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRIVATE_KEY }}
+        # loads your VPS's private SSH key into this VM's ssh-agent, so
+        # subsequent steps can SSH out without a password prompt
+
+      - name: Deploy to production
+        uses: matheusvanzan/sshpass-action@v2
+        with:
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USERNAME }}
+          key: ${{ secrets.PRIVATE_KEY }}
+          run: |
+            cd ${{ secrets.PROJECT_PATH }}
+            git pull origin main
+            cd 7_Deployment_Test
+            docker compose up -d --build
+        # SSHs INTO your VPS and runs these three commands there --
+        # this is the step that actually touches your real server
