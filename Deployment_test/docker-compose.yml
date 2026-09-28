@@ -39,7 +39,7 @@ services:
     depends_on:
       - mlflow
     ports:
-      - "1061:8000"
+      - "1061:1061"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
