@@ -31,6 +31,9 @@ st.markdown(
 st.caption(f"Currently supports Bitcoin only, on a fixed {FIXED_HORIZON} horizon.")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Health check — confirms the API is reachable and the fixed horizon is loaded
+# ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=15)
 def get_health():
     try:
@@ -58,6 +61,10 @@ else:
 
 st.divider()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Predict — single button, no inputs
+# ══════════════════════════════════════════════════════════════════════════════
 st.header("🔮 Get a Live Prediction")
 st.write(
     f"Click below to fetch the latest Bitcoin price data and predict "

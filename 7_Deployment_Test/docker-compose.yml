@@ -16,7 +16,7 @@ services:
       --uvicorn-opts "--forwarded-allow-ips=*"
       --allowed-hosts "*"
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:1060
+      - MLFLOW_TRACKING_URI = http://mlflow:1060
     ports:
       - "1060:1060"
     volumes:
@@ -33,7 +33,7 @@ services:
       dockerfile: api/Dockerfile
     container_name: binance-api
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:1060
+      - MLFLOW_TRACKING_URI = http://mlflow:1060
       - ROOT_PATH=/api
     depends_on:
       - mlflow
