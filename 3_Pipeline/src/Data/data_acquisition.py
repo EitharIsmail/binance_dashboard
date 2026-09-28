@@ -99,6 +99,21 @@ class BinanceDataAcquisition:
         Execute full data acquisition: generate URLs → download → process → combine.
         """
         logger.info("📥 Starting Binance Data Acquisition")
+
+        # 0. Check if the data already exists
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        self.file_path = os.path.join(
+            self.output_dir,
+            f"{self.symbol}_{self.interval}_raw.parquet"
+        )
+
+        if os.path.exists(self.file_path):
+            logger.info(f"✅ Data already exists: {self.file_path}")
+            logger.info("♻️ Reusing existing data instead of downloading again.")
+
+            return pd.read_parquet(self.file_path)
+
         
         # 1. Prepare files
         file_list = self.generate_monthly_urls(start_date, end_date)
@@ -114,8 +129,6 @@ class BinanceDataAcquisition:
         final_df = self.combine_and_clean_dataframes(monthly_dfs)
         
         # 4. Save to disk for reproducibility
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.file_path = os.path.join(self.output_dir, f"{self.symbol}_{self.interval}_raw.parquet")
         final_df.to_parquet(self.file_path, index=False)
         
         logger.info(f"✅ Data acquisition complete. Saved to: {self.file_path}")

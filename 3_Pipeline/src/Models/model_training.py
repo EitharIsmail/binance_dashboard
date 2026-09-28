@@ -21,7 +21,6 @@ from sklearn.ensemble import (
     AdaBoostClassifier,
 )
 from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
@@ -74,7 +73,6 @@ def get_default_models() -> Dict[str, object]:
             n_estimators=100, learning_rate=0.05, random_state=42
         ),
         "SVC (RBF)": SVC(kernel="rbf", probability=True, random_state=42),
-        "KNN": KNeighborsClassifier(n_neighbors=15, n_jobs=-1),
     }
 
 
@@ -160,9 +158,8 @@ def train_all_models(
     Fits every model in `models` with balanced sample weights.
 
     Returns {name: {"model": fitted_model, "train_time": seconds}}.
-    Models that fail to fit (e.g. KNN, which doesn't accept sample_weight)
-    are skipped with a logged warning rather than raising -- this matches
-    the notebook's actual observed behaviour.
+    Models that fail to fit
+    are skipped with a logged warning rather than raising , allowing the remaining models to continue training.
 
     Nothing is persisted here; that's registry.py's job.
     """

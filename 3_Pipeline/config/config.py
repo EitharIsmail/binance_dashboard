@@ -65,7 +65,7 @@ class ModelConfig:
     models_to_train: List[str] = field(default_factory=lambda: [
         "Logistic Regression", "Random Forest", "Extra Trees",
         "XGBoost", "LightGBM", "CatBoost",
-        "Gradient Boosting", "AdaBoost", "SVC (RBF)", "KNN",
+        "Gradient Boosting", "AdaBoost", "SVC (RBF)",
     ])
 
 
