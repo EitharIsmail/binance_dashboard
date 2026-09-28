@@ -201,13 +201,31 @@ def fetch_recent_klines(
     archive_df = _fetch_latest_monthly_archive(symbol, interval)
 
     # --- Source 2: live REST API, current + very recent candles ---
-    live_df = _fetch_live_klines(symbol, interval, limit=min(limit, 1000))
+    try:
+        live_df = _fetch_live_klines(
+            symbol, interval, limit=min(limit, 1000)
+        )
+    except requests.RequestException as e:
+        logger.warning(
+            f"Live Binance API unavailable ({e}). "
+            "Using Binance Vision archive only."
+        )
+        live_df = pd.DataFrame()
 
     # --- Merge: live wins on overlapping timestamps ---
     if archive_df is not None and not archive_df.empty:
-        combined = pd.concat([archive_df, live_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["open_time"], keep="last")
+        if not live_df.empty:
+            combined = pd.concat([archive_df, live_df], ignore_index=True)
+            combined = combined.drop_duplicates(
+                subset=["open_time"], keep="last"
+            )
+        else:
+            combined = archive_df
     else:
+        if live_df.empty:
+            raise RuntimeError(
+                "Neither Binance Vision archive nor Binance Live API is available."
+            )
         combined = live_df
 
     combined = combined.sort_values("open_time").reset_index(drop=True)
