@@ -14,6 +14,6 @@ COPY api/ ./api/
 
 RUN uv pip install --system --no-cache-dir -r api/requirements.txt
 
-EXPOSE 8000
+EXPOSE 1061
 
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "1061"]
