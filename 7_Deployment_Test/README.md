@@ -4,7 +4,7 @@ This folder contains the **containerized deployment environment** for the Binanc
 
 It brings together three services:
 
-* **MLflow** — model registry and model-serving artifact source
+* **MLflow** — model registry and model artifact serving
 * **FastAPI** — online prediction API
 * **Streamlit** — user-facing prediction dashboard
 
@@ -14,18 +14,19 @@ The purpose of this layer is to verify that the trained model can move from the 
 
 ---
 
-## 1. Deployment Architecture
+# 1. Deployment Architecture
 
 The complete deployment consists of:
 
-```text id="6s7c9a"
+```text
                          Browser
                             │
-                            │ http://localhost:8501
+                            │ VPS host port 1063
                             ▼
                  ┌─────────────────────┐
                  │     Streamlit       │
                  │     Dashboard       │
+                 │     :8501           │
                  │                     │
                  │  "Predict" button   │
                  └──────────┬──────────┘
@@ -35,16 +36,18 @@ The complete deployment consists of:
                  ┌─────────────────────┐
                  │      FastAPI        │
                  │    Prediction API   │
+                 │       :8000         │
                  │                     │
                  │  /health            │
                  │  /predict           │
                  └──────────┬──────────┘
                             │
-                            │ MLflow
+                            │ http://mlflow:1060
                             ▼
                  ┌─────────────────────┐
                  │       MLflow        │
                  │  Model Registry     │
+                 │       :1060         │
                  │                     │
                  │    Production       │
                  │      Model          │
@@ -53,7 +56,7 @@ The complete deployment consists of:
 
 The API also communicates directly with Binance to obtain recent market data:
 
-```text id="tx7c4a"
+```text
                        Binance
                           │
                           │ Recent market data
@@ -81,7 +84,7 @@ The training pipeline and online API can work independently, but an actual appli
 
 This deployment environment tests the complete chain:
 
-```text id="3f5g8e"
+```text
 Trained Model
      ↓
 MLflow Registry
@@ -110,15 +113,15 @@ It verifies that:
 
 The `docker-compose.yml` defines three services.
 
-| Service     | Technology | Port | Responsibility                      |
-| ----------- | ---------- | ---: | ----------------------------------- |
-| `mlflow`    | MLflow     | 5000 | Model registry and artifact serving |
-| `api`       | FastAPI    | 8000 | Online inference                    |
-| `dashboard` | Streamlit  | 8501 | User interface                      |
+| Service     | Technology | VPS Host Port | Container Port | Responsibility                      |
+| ----------- | ---------- | ------------: | -------------: | ----------------------------------- |
+| `mlflow`    | MLflow     |      **1060** |       **1060** | Model registry and artifact serving |
+| `api`       | FastAPI    |      **1061** |       **8000** | Online inference                    |
+| `dashboard` | Streamlit  |      **1063** |       **8501** | User interface                      |
 
 The dependency chain is:
 
-```text id="y0x8f3"
+```text
 MLflow
   ↓
 API
@@ -126,85 +129,151 @@ API
 Dashboard
 ```
 
-Docker Compose starts the services according to these dependencies.
+Docker Compose manages the services and their dependencies. Health checks are used to determine whether services are responding.
 
 ---
 
-# 4. MLflow Service
+# 4. Host Ports vs Docker Network Ports
 
-The MLflow service uses the official MLflow container image:
+There are two networking perspectives in this deployment.
 
-```text id="w8t7e1"
+## From the host/VPS
+
+The services use the assigned VPS host ports:
+
+```text
+MLflow     → 1060
+FastAPI    → 1061
+Dashboard  → 1063
+```
+
+If these ports are exposed externally, they can be accessed using:
+
+```text
+MLflow     → http://35.202.67.240:1060
+FastAPI    → http://35.202.67.240:1061
+Dashboard  → http://35.202.67.240:1063
+```
+
+## Between containers
+
+Docker services communicate using their **Compose service names and container ports**:
+
+```text
+dashboard → http://api:8000
+api       → http://mlflow:1060
+```
+
+Therefore:
+
+```text
+Browser
+   │
+   │ VPS host port 1063
+   ▼
+Streamlit :8501
+   │
+   │ api:8000
+   ▼
+FastAPI :8000
+   │
+   │ mlflow:1060
+   ▼
+MLflow :1060
+```
+
+**Important:** `localhost` inside a container refers to that same container, not another Docker service.
+
+The host port and container port do not have to be the same.
+
+For example:
+
+```text
+VPS 1061 → API container 8000
+VPS 1063 → Dashboard container 8501
+```
+
+---
+
+# 5. MLflow Service
+
+The MLflow service uses:
+
+```text
 ghcr.io/mlflow/mlflow:latest
 ```
 
-It starts an MLflow tracking server on:
+It starts an MLflow tracking server on container port:
 
-```text id="6yq4zv"
-http://localhost:5000
+```text
+1060
 ```
 
-Inside the Docker network, other services access it using:
+The host port is also:
 
-```text id="w0x8z5"
-http://mlflow:5000
+```text
+1060
 ```
 
-The important distinction is:
+When directly exposed, the host accesses MLflow through:
 
-```text id="7e3n5q"
-localhost:5000
+```text
+http://35.202.67.240:1060
 ```
 
-is used from the host machine, while:
+When accessing MLflow locally through the SSH tunnel described later, use:
 
-```text id="d7m0q2"
-mlflow:5000
+```text
+http://localhost:1060
 ```
 
-is used by containers communicating with the MLflow service.
+Inside the Docker network, the API accesses MLflow using:
+
+```text
+http://mlflow:1060
+```
 
 ---
 
-## 4.1 MLflow Storage
+## 5.1 MLflow Storage
 
 The deployment environment stores the MLflow database in:
 
-```text id="s1v5k4"
+```text
 7_Deployment_Test/mlflow/mlflow.db
 ```
 
 The directory is mounted into the container:
 
-```text id="4z6b2c"
+```text
 ./mlflow:/mlflow
 ```
 
-The MLflow backend store is therefore:
+The MLflow backend store is:
 
-```text id="t2m9x1"
+```text
 sqlite:////mlflow/mlflow.db
 ```
 
 The deployment environment also mounts:
 
-```text id="6g1x0r"
+```text
 ./mlruns:/mlruns
 ```
 
 for MLflow artifacts.
 
-This allows the model registry and artifacts to persist outside the container.
+This allows the model registry database and artifacts to persist outside the container.
 
 ---
 
-# 5. Why a Separate Deployment MLflow Exists
+# 6. Why a Separate Deployment MLflow Exists
 
 The project has an MLflow environment associated with the training pipeline and another one used by this deployment environment.
 
 Conceptually:
 
-```text id="f4s1z7"
+```text
 3_Pipeline
      │
      ▼
@@ -221,23 +290,23 @@ Production
 FastAPI
 ```
 
-The deployment environment therefore acts as a controlled runtime environment rather than directly depending on the local MLflow database used during development/training.
+The deployment environment therefore acts as a controlled runtime environment rather than directly depending on the MLflow database used during development and training.
 
-The model artifact present under `mlruns/` represents the model available to this deployment environment.
+The model artifact available under `mlruns/` represents the model available to this deployment environment.
 
 ---
 
-# 6. FastAPI Service
+# 7. FastAPI Service
 
 The API is built from:
 
-```text id="b9k6p3"
+```text
 ../4_Deploy_Online/api/Dockerfile
 ```
 
 The Docker Compose configuration uses:
 
-```yaml id="z0m3v8"
+```yaml
 build:
   context: ../4_Deploy_Online
   dockerfile: api/Dockerfile
@@ -247,7 +316,7 @@ This means the deployment test does not duplicate the API source code.
 
 Instead:
 
-```text id="n5c2r9"
+```text
 7_Deployment_Test
        │
        └── docker-compose.yml
@@ -259,33 +328,45 @@ Instead:
                 FastAPI
 ```
 
-This is useful because the integration environment tests the same API implementation that belongs to the online deployment layer.
+This allows the integration environment to test the same API implementation used by the online deployment layer.
+
+The FastAPI container listens on:
+
+```text
+8000
+```
+
+The VPS host maps:
+
+```text
+1061 → 8000
+```
 
 ---
 
-# 7. API → MLflow Communication
+# 8. API → MLflow Communication
 
-The API receives this environment variable:
+The API receives:
 
-```text id="6w3p8d"
-MLFLOW_TRACKING_URI=http://mlflow:5000
+```text
+MLFLOW_TRACKING_URI=http://mlflow:1060
 ```
 
-Therefore, inside the Docker network:
+Therefore:
 
-```text id="a1f6q0"
-FastAPI
+```text
+FastAPI :8000
    │
-   │ http://mlflow:5000
+   │ http://mlflow:1060
    ▼
-MLflow
+MLflow :1060
 ```
 
 At application startup, FastAPI loads the Production models from MLflow.
 
 For example:
 
-```text id="m8v4s2"
+```text
 models:/BTCUSDT_30m_classifier/Production
 ```
 
@@ -293,13 +374,13 @@ The API then keeps the loaded model in memory for inference.
 
 ---
 
-# 8. FastAPI → Binance Communication
+# 9. FastAPI → Binance Communication
 
 The API obtains recent market data directly from Binance.
 
 For a prediction request, the flow is:
 
-```text id="q8j4t1"
+```text
 Streamlit
     ↓
 FastAPI
@@ -326,11 +407,11 @@ This allows the API to obtain recent market information while maintaining compat
 
 ---
 
-# 9. Streamlit Dashboard
+# 10. Streamlit Dashboard
 
 The user-facing application is located in:
 
-```text id="v1q7r3"
+```text
 dashboard/
 ├── dashboard.py
 ├── Dockerfile
@@ -341,7 +422,7 @@ The dashboard is intentionally simple in the current MVP.
 
 It currently supports:
 
-```text id="s4n9x2"
+```text
 Asset: BTCUSDT
 Horizon: 30 minutes
 ```
@@ -350,73 +431,79 @@ There are no user controls for selecting another asset or horizon yet.
 
 The main interaction is:
 
-```text id="r2w7c5"
+```text
 ▶ Predict Bitcoin's next 30 minutes
+```
+
+The Streamlit container listens on:
+
+```text
+8501
+```
+
+The VPS host maps:
+
+```text
+1063 → 8501
 ```
 
 ---
 
-# 10. Dashboard → API Communication
+# 11. Dashboard → API Communication
 
 The dashboard receives:
 
-```text id="0v6n2k"
+```text
 ONLINE_API=http://api:8000
 ```
-
-This is an important Docker networking detail.
 
 The Streamlit Python process runs **inside its own container**.
 
 Therefore it should not use:
 
-```text id="h4b1z9"
-http://localhost:8000
+```text
+http://localhost:1061
 ```
 
 to communicate with the API container.
 
-Instead, it uses the Docker Compose service name:
+Instead, it uses the Docker Compose service name and the API's container port:
 
-```text id="d6q3m8"
+```text
 http://api:8000
 ```
 
 The communication is:
 
-```text id="n0p5x7"
-Streamlit container
+```text
+Streamlit container :8501
        │
        │ http://api:8000
        ▼
-FastAPI container
+FastAPI container :8000
 ```
 
 The user accesses Streamlit from the host through:
 
-```text id="u7k2c1"
-http://localhost:8501
+```text
+http://localhost:1063
 ```
 
-So there are two different networking perspectives:
+when running locally, or:
 
-```text id="b4m9r2"
-Browser → localhost:8501 → Streamlit
-
-Streamlit → api:8000 → FastAPI
-
-FastAPI → mlflow:5000 → MLflow
+```text
+http://35.202.67.240:1063
 ```
 
-This distinction is important when debugging Docker networking.
+when accessing the VPS directly.
 
 ---
 
-# 11. Dashboard Health Check
+# 12. Dashboard Health Check
 
 Before allowing a prediction, the dashboard checks:
 
-```text id="k3x8p0"
+```text
 GET /health
 ```
 
@@ -426,7 +513,7 @@ The dashboard then checks whether the required `30m` model is available.
 
 Conceptually:
 
-```text id="z5d1q8"
+```text
 Dashboard
     │
     ▼
@@ -451,11 +538,11 @@ This prevents the user interface from attempting a prediction when the required 
 
 ---
 
-# 12. Prediction Request
+# 13. Prediction Request
 
 When the user clicks the prediction button, Streamlit sends:
 
-```json id="k8x1m5"
+```json
 {
   "horizon": "30m"
 }
@@ -463,7 +550,7 @@ When the user clicks the prediction button, Streamlit sends:
 
 to:
 
-```text id="z6v3r1"
+```text
 POST http://api:8000/predict
 ```
 
@@ -478,7 +565,7 @@ The API then:
 
 Example API response:
 
-```json id="j9c2w6"
+```json
 {
   "prediction": "Bull",
   "model_name": "BTCUSDT_30m_classifier",
@@ -490,20 +577,20 @@ The dashboard then displays the result to the user.
 
 ---
 
-# 13. End-to-End Prediction Flow
+# 14. End-to-End Prediction Flow
 
 The complete request can be represented as:
 
-```text id="r5m1q8"
+```text
 User
  │
  │ Click "Predict"
  ▼
-Streamlit
+Streamlit :8501
  │
  │ POST /predict
  ▼
-FastAPI
+FastAPI :8000
  │
  ├── Select 30m Production model
  │
@@ -529,40 +616,33 @@ Bull / Neutral / Bear
 
 ---
 
-# 14. Docker Compose Networking
+# 15. Docker Compose Networking
 
 Docker Compose creates a shared internal network for the services.
 
-The services can therefore communicate using their service names:
+The services communicate using their Compose service names and **container ports**:
 
-```text id="d9s4m2"
-mlflow:5000
+```text
+mlflow:1060
 api:8000
+dashboard:8501
 ```
 
-while the host accesses them through published ports:
+The host mappings are:
 
-```text id="q3w8n6"
-localhost:5000
-localhost:8000
-localhost:8501
-```
+| Service   | Docker address   | VPS host address     |
+| --------- | ---------------- | -------------------- |
+| MLflow    | `mlflow:1060`    | `35.202.67.240:1060` |
+| FastAPI   | `api:8000`       | `35.202.67.240:1061` |
+| Streamlit | `dashboard:8501` | `35.202.67.240:1063` |
 
-The mapping is:
+The Docker address should be used for **service-to-service communication**.
 
-| Service   | Container address | Host address     |
-| --------- | ----------------- | ---------------- |
-| MLflow    | `mlflow:5000`     | `localhost:5000` |
-| FastAPI   | `api:8000`        | `localhost:8000` |
-| Streamlit | `dashboard:8501`  | `localhost:8501` |
-
-The container address should be used for **service-to-service communication**.
-
-The host address should be used from the **browser or host machine**.
+The host address should be used from the **browser or external host** when the corresponding host port is exposed.
 
 ---
 
-# 15. Health Checks
+# 16. Health Checks
 
 Docker Compose defines health checks for the API and dashboard.
 
@@ -570,7 +650,7 @@ Docker Compose defines health checks for the API and dashboard.
 
 The container checks:
 
-```text id="w3f7n1"
+```text
 http://localhost:8000/health
 ```
 
@@ -580,7 +660,7 @@ every 30 seconds.
 
 The container checks:
 
-```text id="a6q2v8"
+```text
 http://localhost:8501/_stcore/health
 ```
 
@@ -590,39 +670,53 @@ These checks allow Docker to detect whether the services are responding.
 
 ---
 
-# 16. Starting the Deployment
+# 17. Starting the Deployment on the VPS
 
-From this directory:
+The deployment runs on the shared VPS using the assigned host ports:
 
-```bash id="n7x3m9"
-cd 7_Deployment_Test
+```text
+MLflow:    1060
+FastAPI:   1061
+Dashboard: 1063
 ```
 
-start all services:
+Connect to the VPS:
 
-```bash id="r1v6k4"
+```bash
+ssh eithar@35.202.67.240
+```
+
+Then:
+
+```bash
+cd ~/binance_dashboard/7_Deployment_Test
+```
+
+Start the deployment:
+
+```bash
 docker compose up --build
 ```
 
-The `--build` option ensures that the API and dashboard images are rebuilt from the current source.
+The `--build` option rebuilds the API and dashboard images from the current source.
 
 To run in the background:
 
-```bash id="p5q8w2"
+```bash
 docker compose up --build -d
 ```
 
 ---
 
-# 17. Checking Running Containers
+# 18. Checking Running Containers
 
 Run:
 
-```bash id="s8d2k5"
+```bash
 docker compose ps
 ```
 
-You should see the three services:
+You should see:
 
 ```text
 mlflow
@@ -630,106 +724,212 @@ api
 dashboard
 ```
 
-To inspect logs:
+To inspect all logs:
 
-```bash id="c7m1v4"
+```bash
 docker compose logs
 ```
 
 Or inspect an individual service:
 
-```bash id="x9q3b6"
+```bash
 docker compose logs api
 ```
 
-```bash id="h2v7n1"
+```bash
 docker compose logs dashboard
 ```
 
-```bash id="k5w8d3"
+```bash
 docker compose logs mlflow
 ```
 
 Follow logs continuously with:
 
-```bash id="j4m9p2"
+```bash
 docker compose logs -f api
 ```
 
 ---
 
-# 18. Accessing the Services
+# 19. Accessing the VPS Services
 
-Once the containers are running:
+Once the containers are running, and assuming the host ports are externally exposed:
 
 ### Streamlit Dashboard
 
-```text id="q6r2x8"
-http://localhost:8501
+```text
+http://35.202.67.240:1063
 ```
-
-This is the main user interface.
 
 ### FastAPI
 
-```text id="m3v7k1"
-http://localhost:8000
+```text
+http://35.202.67.240:1061
 ```
 
 ### Swagger API Documentation
 
-```text id="t8n4c5"
-http://localhost:8000/docs
+```text
+http://35.202.67.240:1061/docs
 ```
 
 ### FastAPI Health
 
-```text id="y2p6s9"
-http://localhost:8000/health
+```text
+http://35.202.67.240:1061/health
 ```
 
 ### MLflow
 
-```text id="f7m1q3"
-http://localhost:5000
+```text
+http://35.202.67.240:1060
+```
+
+> These are the current deployment-test host ports. In the next deployment stage, Nginx can place the dashboard and API behind a domain/reverse proxy and HTTPS instead of exposing these ports directly.
+
+---
+
+# 20. SSH Tunnel for Local MLflow Access
+
+The local training pipeline can connect to the VPS MLflow server through an SSH tunnel.
+
+Run this command on the **local laptop**, not inside the VPS:
+
+```bash
+ssh -N -L 1060:localhost:1060 eithar@35.202.67.240
+```
+
+This creates:
+
+```text
+Local laptop
+localhost:1060
+      │
+      │ SSH tunnel
+      ▼
+VPS
+localhost:1060
+      │
+      ▼
+MLflow
+```
+
+Keep the SSH tunnel terminal open while using the connection.
+
+Verify it from another local terminal:
+
+```bash
+curl http://localhost:1060
+```
+
+You should receive an MLflow response.
+
+---
+
+# 21. Connecting the Local Training Pipeline to VPS MLflow
+
+On the local laptop:
+
+```bash
+cd ~/Documents/Coding/binance_dashboard
+```
+
+Activate the environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Set the MLflow tracking URI:
+
+```bash
+export MLFLOW_TRACKING_URI=http://localhost:1060
+```
+
+Verify:
+
+```bash
+echo $MLFLOW_TRACKING_URI
+```
+
+Expected:
+
+```text
+http://localhost:1060
+```
+
+The local pipeline can then communicate with the VPS MLflow server through the SSH tunnel.
+
+Run the pipeline:
+
+```bash
+python 3_Pipeline/flow.py
+```
+
+The resulting communication is:
+
+```text
+Local Training Pipeline
+          │
+          │ localhost:1060
+          ▼
+     SSH Tunnel
+          │
+          ▼
+    VPS MLflow:1060
 ```
 
 ---
 
-# 19. Testing the Deployment
+# 22. Testing the Deployment
 
 A useful testing sequence is:
 
 ### Test 1 — Check containers
 
-```bash id="u5c8r2"
+```bash
 docker compose ps
 ```
 
 Confirm that the three services are running.
 
-### Test 2 — Check API health
+### Test 2 — Check MLflow
 
 Open:
 
-```text id="b1n6z4"
-http://localhost:8000/health
+```text
+http://35.202.67.240:1060
+```
+
+or, through the SSH tunnel from the laptop:
+
+```text
+http://localhost:1060
+```
+
+### Test 3 — Check API health
+
+Open:
+
+```text
+http://35.202.67.240:1061/health
 ```
 
 The response should show the loaded Production models.
 
 For the current MVP, the expected deployed horizon is:
 
-```text id="p4w7m2"
+```text
 30m
 ```
 
-### Test 3 — Test Swagger
+### Test 4 — Test Swagger
 
 Open:
 
-```text id="k8q3v6"
-http://localhost:8000/docs
+```text
+http://35.202.67.240:1061/docs
 ```
 
 Use:
@@ -740,18 +940,18 @@ POST /predict
 
 with:
 
-```json id="a2j9s5"
+```json
 {
   "horizon": "30m"
 }
 ```
 
-### Test 4 — Test the dashboard
+### Test 5 — Test the dashboard
 
 Open:
 
-```text id="z6r1x4"
-http://localhost:8501
+```text
+http://35.202.67.240:1063
 ```
 
 The dashboard should:
@@ -764,11 +964,11 @@ The dashboard should:
 
 ---
 
-# 20. Stopping the Deployment
+# 23. Stopping the Deployment
 
 Stop the services with:
 
-```bash id="v3m8q1"
+```bash
 docker compose down
 ```
 
@@ -776,14 +976,21 @@ This stops and removes the containers while leaving the mounted MLflow database 
 
 To rebuild everything after code changes:
 
-```bash id="c1x7n5"
+```bash
 docker compose down
 docker compose up --build
 ```
 
+To run the rebuilt deployment in the background:
+
+```bash
+docker compose down
+docker compose up --build -d
+```
+
 ---
 
-# 21. Dashboard Design
+# 24. Dashboard Design
 
 The current dashboard deliberately has a small interface.
 
@@ -819,40 +1026,43 @@ This provides basic prediction traceability.
 
 ---
 
-# 22. Current Deployment Configuration
+# 25. Current Deployment Configuration
 
 The current MVP is intentionally fixed to:
 
-| Configuration           | Value                 |
-| ----------------------- | --------------------- |
-| Asset                   | Bitcoin / BTCUSDT     |
-| Candle interval         | 15 minutes            |
-| Prediction horizon      | 30 minutes            |
-| Prediction classes      | Bull / Neutral / Bear |
-| API                     | FastAPI               |
-| Dashboard               | Streamlit             |
-| Model registry          | MLflow                |
-| Container orchestration | Docker Compose        |
-| Dashboard port          | 8501                  |
-| API port                | 8000                  |
-| MLflow port             | 5000                  |
+| Configuration            | Value                 |
+| ------------------------ | --------------------- |
+| Asset                    | Bitcoin / BTCUSDT     |
+| Candle interval          | 15 minutes            |
+| Prediction horizon       | 30 minutes            |
+| Prediction classes       | Bull / Neutral / Bear |
+| API                      | FastAPI               |
+| Dashboard                | Streamlit             |
+| Model registry           | MLflow                |
+| Container orchestration  | Docker Compose        |
+| MLflow host port         | **1060**              |
+| MLflow container port    | **1060**              |
+| API host port            | **1061**              |
+| API container port       | **8000**              |
+| Dashboard host port      | **1063**              |
+| Dashboard container port | **8501**              |
 
 The API itself has support for multiple horizons, but the current Streamlit dashboard intentionally exposes only the `30m` Bitcoin prediction workflow.
 
 ---
 
-# 23. Environment Variables
+# 26. Environment Variables
 
 ### API
 
 The Compose environment provides:
 
-```text id="e5w2n9"
-MLFLOW_TRACKING_URI=http://mlflow:5000
+```text
+MLFLOW_TRACKING_URI=http://mlflow:1060
 ROOT_PATH=/api
 ```
 
-`MLFLOW_TRACKING_URI` tells the API where the deployment MLflow server is located.
+`MLFLOW_TRACKING_URI` tells the API where the deployment MLflow server is located inside the Docker network.
 
 ---
 
@@ -860,7 +1070,7 @@ ROOT_PATH=/api
 
 The dashboard receives:
 
-```text id="m7q4x1"
+```text
 ONLINE_API=http://api:8000
 ```
 
@@ -876,11 +1086,11 @@ The dashboard also receives Streamlit server configuration for:
 
 ---
 
-# 24. Persistence
+# 27. Persistence
 
 The Compose configuration mounts two host directories:
 
-```text id="h8p2r6"
+```text
 ./mlflow:/mlflow
 ./mlruns:/mlruns
 ```
@@ -889,7 +1099,7 @@ This means MLflow's database and artifacts are not stored only inside the tempor
 
 The deployment structure is:
 
-```text id="d2n7k4"
+```text
 7_Deployment_Test/
 │
 ├── mlflow/
@@ -903,11 +1113,11 @@ Therefore, recreating the MLflow container does not automatically remove these h
 
 ---
 
-# 25. Deployment Artifact
+# 28. Deployment Artifact
 
-The deployment environment currently contains a model artifact under:
+The deployment environment currently contains model artifacts under:
 
-```text id="q9m3v7"
+```text
 mlruns/
 └── 1/
     └── models/
@@ -920,9 +1130,9 @@ mlruns/
                 └── requirements.txt
 ```
 
-The important artifact is the serialized ML model:
+The important serialized model artifact is:
 
-```text id="w4c8n2"
+```text
 model.skops
 ```
 
@@ -932,11 +1142,11 @@ The API ultimately loads the model through MLflow rather than manually opening `
 
 ---
 
-# 26. Integration Boundaries
+# 29. Integration Boundaries
 
 Each component has a clearly defined responsibility:
 
-```text id="s6x1m8"
+```text
 ┌─────────────────┐
 │    Streamlit    │
 │                 │
@@ -968,11 +1178,11 @@ For example:
 
 ---
 
-# 27. Relationship to the Other Project Components
+# 30. Relationship to the Other Project Components
 
 The broader project is divided into several stages.
 
-```text id="m1v5q8"
+```text
 3_Pipeline
     │
     │ Train + evaluate
@@ -1005,13 +1215,13 @@ The responsibilities are therefore:
 
 ---
 
-# 28. Troubleshooting
+# 31. Troubleshooting
 
 ## API cannot load a model
 
 Check:
 
-```bash id="r8m2c5"
+```bash
 docker compose logs api
 ```
 
@@ -1023,13 +1233,17 @@ Look for errors related to:
 * Production stage,
 * missing artifacts.
 
-Then check:
+Then check MLflow:
 
 ```text
-http://localhost:5000
+http://35.202.67.240:1060
 ```
 
-to verify that the deployment MLflow server is running.
+or locally through the SSH tunnel:
+
+```text
+http://localhost:1060
+```
 
 ---
 
@@ -1037,20 +1251,20 @@ to verify that the deployment MLflow server is running.
 
 Check:
 
-```bash id="x3n7k1"
+```bash
 docker compose logs dashboard
 ```
 
 Inside Docker, the dashboard should use:
 
-```text id="b5q9m4"
+```text
 http://api:8000
 ```
 
 not:
 
-```text id="z7c2p6"
-http://localhost:8000
+```text
+http://localhost:1061
 ```
 
 ---
@@ -1059,8 +1273,8 @@ http://localhost:8000
 
 Check:
 
-```text id="f1m8r3"
-http://localhost:8000/health
+```text
+http://35.202.67.240:1061/health
 ```
 
 If the `30m` horizon is not present in `loaded_horizons`, the API does not currently have a Production model available for that horizon.
@@ -1071,7 +1285,7 @@ If the `30m` horizon is not present in `loaded_horizons`, the API does not curre
 
 Check the dependency chain:
 
-```text id="v6q2n9"
+```text
 MLflow
   ↓
 API
@@ -1081,7 +1295,7 @@ Dashboard
 
 Then inspect each service:
 
-```bash id="c4r8m1"
+```bash
 docker compose logs mlflow
 docker compose logs api
 docker compose logs dashboard
@@ -1089,11 +1303,39 @@ docker compose logs dashboard
 
 ---
 
-# 29. Current MVP Scope
+## Docker build fails with "no space left on device"
+
+On the shared VPS, first inspect disk usage:
+
+```bash
+df -h
+```
+
+Then inspect Docker usage:
+
+```bash
+docker system df
+```
+
+Do **not** immediately run:
+
+```bash
+docker system prune -a --volumes
+```
+
+on a shared VPS.
+
+That command can remove unused Docker resources, including volumes, that may belong to other projects or contain important data.
+
+Only clean resources after confirming that they belong to this project and are safe to remove.
+
+---
+
+# 32. Current MVP Scope
 
 The current deployment demonstrates a complete end-to-end ML inference workflow:
 
-```text id="n9x3k7"
+```text
 Historical Training
        ↓
 Model Registry
@@ -1115,7 +1357,7 @@ Streamlit Dashboard
 
 The current user-facing workflow is intentionally limited to:
 
-```text id="k5m1r8"
+```text
 BTCUSDT
    +
 30-minute horizon
@@ -1127,7 +1369,7 @@ This provides a small, testable deployment before expanding the application.
 
 ---
 
-# 30. Future Improvements
+# 33. Future Improvements
 
 Possible improvements to this deployment layer include:
 
@@ -1152,13 +1394,13 @@ For production use, additional infrastructure would also be required around secu
 
 ---
 
-# 31. Important Note
+# 34. Important Note
 
 The dashboard presents the output of a machine-learning classification model.
 
 A result such as:
 
-```text id="x2n7c4"
+```text
 Bull
 ```
 
@@ -1168,85 +1410,128 @@ The application should therefore be understood as an **ML-based decision-support
 
 ---
 
-## Quick Reference
+# 35. Quick Reference
 
-### Start
+## Connect to VPS
 
-```bash id="q7m2v9"
-cd 7_Deployment_Test
-docker compose up --build
+```bash
+ssh eithar@35.202.67.240
 ```
 
-### Run in background
+## Start SSH tunnel — local laptop
 
-```bash id="w4c8n1"
+Run this in a separate local terminal:
+
+```bash
+ssh -N -L 1060:localhost:1060 eithar@35.202.67.240
+```
+
+## Verify local MLflow tunnel
+
+```bash
+curl http://localhost:1060
+```
+
+## Configure local MLflow
+
+```bash
+cd ~/Documents/Coding/binance_dashboard
+source .venv/bin/activate
+export MLFLOW_TRACKING_URI=http://localhost:1060
+echo $MLFLOW_TRACKING_URI
+```
+
+## Run the training pipeline locally
+
+```bash
+python 3_Pipeline/flow.py
+```
+
+## Go to deployment directory on VPS
+
+```bash
+cd ~/binance_dashboard/7_Deployment_Test
+```
+
+## Build and start
+
+```bash
 docker compose up --build -d
 ```
 
-### Check services
+## Check services
 
-```bash id="m9x3r6"
+```bash
 docker compose ps
 ```
 
-### View logs
+## View logs
 
-```bash id="p2k7v5"
+```bash
 docker compose logs -f
 ```
 
-### Open dashboard
+## Open VPS dashboard
 
-```text id="h6n1q8"
-http://localhost:8501
+```text
+http://35.202.67.240:1063
 ```
 
-### Open API
+## Open VPS API
 
-```text id="d3r8m2"
-http://localhost:8000
+```text
+http://35.202.67.240:1061
 ```
 
-### Open Swagger
+## Open Swagger
 
-```text id="v5q1x7"
-http://localhost:8000/docs
+```text
+http://35.202.67.240:1061/docs
 ```
 
-### Open MLflow
+## Open VPS MLflow
 
-```text id="c8m4n9"
-http://localhost:5000
+```text
+http://35.202.67.240:1060
 ```
 
-### Stop
+## Open MLflow locally through SSH tunnel
 
-```bash id="j2w6p3"
+```text
+http://localhost:1060
+```
+
+## Stop deployment
+
+```bash
 docker compose down
 ```
 
 ---
 
-## Summary
+# Summary
 
 `7_Deployment_Test` is the integration environment that connects the project's trained ML model to a complete online application:
 
-```text id="s3m8q1"
+```text
                 ┌──────────────┐
                 │    MLflow    │
                 │    Registry  │
+                │    :1060     │
                 └──────┬───────┘
                        │
                        ▼
                 ┌──────────────┐
                 │   FastAPI    │
                 │  /predict    │
+                │    :8000     │
                 └──────┬───────┘
                        │
                        ▼
                 ┌──────────────┐
                 │  Streamlit   │
                 │  Dashboard   │
+                │    :8501     │
                 └──────┬───────┘
                        │
                        ▼
@@ -1254,3 +1539,26 @@ docker compose down
 ```
 
 Docker Compose packages these components into a reproducible environment where model serving, API inference, and the user interface can be tested together.
+
+The current VPS host-port configuration is:
+
+```text
+MLflow    → 1060 → container 1060
+FastAPI   → 1061 → container 8000
+Streamlit → 1063 → container 8501
+```
+
+The local development workflow can connect to VPS MLflow through an SSH tunnel:
+
+```text
+Local Pipeline
+      │
+      │ localhost:1060
+      ▼
+ SSH Tunnel
+      │
+      ▼
+ VPS MLflow:1060
+```
+
+The next deployment stage can place the API and Streamlit dashboard behind **Nginx/reverse proxy and HTTPS**, while MLflow can remain privately accessible through the SSH tunnel.
