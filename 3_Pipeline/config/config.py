@@ -74,7 +74,7 @@ class MLflowConfig:
     """MLflow tracking and registry configuration."""
 
     experiment_name: str = "binance-ml-pipeline"
-    tracking_uri: str = "http://127.0.0.1:5000"
+    tracking_uri: str = "http://127.0.0.1:1060"
     model_name : str = "BITCOIN_status_Classifier"
 
     project_tag: str = "binance_ml"
