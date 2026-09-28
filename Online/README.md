@@ -76,7 +76,7 @@ The deployment layer has five main responsibilities:
 
 It does **not** retrain models.
 
-Model training, evaluation, registration, and deployment promotion are handled by [`3_Pipeline`](../3_Pipeline/).
+Model training, evaluation, registration, and deployment promotion are handled by [`Pipeline`](../Pipeline/).
 
 ---
 
@@ -292,7 +292,7 @@ This is essential because the model expects the same feature representation that
 The shared implementation is located at:
 
 ```text
-4_Deploy_Online/shared/feature_engineering.py
+Online/shared/feature_engineering.py
 ```
 
 The deployment Docker image copies this module into the container.
@@ -725,7 +725,7 @@ Docker container
 From this directory:
 
 ```bash
-cd 4_Deploy_Online
+cd Online
 ```
 
 start FastAPI with:
@@ -784,7 +784,7 @@ The prediction itself can change as new market data arrives. The model name and 
 The source structure is:
 
 ```text
-4_Deploy_Online/
+Online/
 ├── api/
 │   ├── config.py
 │   ├── Dockerfile
@@ -917,7 +917,7 @@ A horizon becomes actually servable only after its corresponding model has been 
 The broader project separates **model creation** from **model serving**.
 
 ```text
-3_Pipeline
+Pipeline
      │
      │ Train candidate models
      ▼
@@ -935,7 +935,7 @@ Deployment MLflow Registry
 Production
      │
      ▼
-4_Deploy_Online
+Online
      │
      ▼
 FastAPI
@@ -1006,7 +1006,7 @@ At the current deployment state, a Production model is available for the `30m` h
 
 The two folders have different responsibilities.
 
-| `3_Pipeline`                | `4_Deploy_Online`           |
+| `Pipeline`                | `Online`           |
 | --------------------------- | --------------------------- |
 | Acquire historical data     | Fetch recent data           |
 | Clean data                  | Standardize live data       |
@@ -1024,7 +1024,7 @@ The overall workflow is therefore:
 ```text
 Historical Binance Data
         ↓
-3_Pipeline
+Pipeline
         ↓
 Train + Evaluate
         ↓
@@ -1034,7 +1034,7 @@ Deployment Gate
         ↓
 Production Model
         ↓
-4_Deploy_Online
+Online
         ↓
 FastAPI
         ↓
@@ -1147,8 +1147,8 @@ The system should therefore be understood as an **ML decision-support prototype*
 
 ## Related Components
 
-* [`3_Pipeline`](../3_Pipeline/) — historical data processing, feature engineering, model training, evaluation, MLflow tracking, and model registration.
-* [`7_Deployment_Test`](../7_Deployment_Test/) — integration testing of the deployed API and surrounding services.
+* [`Pipeline`](../Pipeline/) — historical data processing, feature engineering, model training, evaluation, MLflow tracking, and model registration.
+* [`Deployment_test`](../Deployment_test/) — integration testing of the deployed API and surrounding services.
 * [`8_CI_CD`](../8_CI_CD/) — continuous integration/deployment workflows.
 * [`9_Monitoring_Observability`](../9_Monitoring_Observability/) — monitoring and observability components.
 

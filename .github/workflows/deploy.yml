@@ -30,7 +30,7 @@ jobs:
           run: |
             cd ${{ secrets.PROJECT_PATH }}
             git pull origin main
-            cd 7_Deployment_Test
+            cd Deployment_test
             docker compose up -d --build
         # SSHs INTO your VPS and runs these three commands there --
         # this is the step that actually touches your real server

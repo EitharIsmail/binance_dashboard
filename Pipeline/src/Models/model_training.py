@@ -515,7 +515,7 @@ class ModelTrainingPipeline:
             ])
             mlflow.sklearn.log_model(
                 full_pipeline,
-                artifact_path="model",
+                name="model",
                 registered_model_name=registered_model_name,
                 skops_trusted_types=["numpy.dtype"],
             )

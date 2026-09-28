@@ -29,7 +29,7 @@ services:
   # ─────────────────────────────────────────────────────────────
   api:
     build:
-      context: ../4_Deploy_Online
+      context: ../Online
       dockerfile: api/Dockerfile
     container_name: binance-api
     environment:

@@ -174,9 +174,9 @@ The project is divided into independent stages.
 
 | Component                                                      | Purpose                                                                                                          |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| [`3_Pipeline/`](./3_Pipeline/README.md)                        | Offline data processing, feature engineering, model training, evaluation, MLflow tracking and model registration |
-| [`4_Deploy_Online/`](./4_Deploy_Online/README.md)              | Online FastAPI inference service that loads the Production model and serves predictions                          |
-| [`7_Deployment_Test/`](./7_Deployment_Test/)                   | Docker Compose environment used to test the complete deployment architecture                                     |
+| [`Pipeline/`](./Pipeline/README.md)                        | Offline data processing, feature engineering, model training, evaluation, MLflow tracking and model registration |
+| [`Online/`](./Online/README.md)              | Online FastAPI inference service that loads the Production model and serves predictions                          |
+| [`Deployment_test/`](./Deployment_test/)                   | Docker Compose environment used to test the complete deployment architecture                                     |
 | [`8_CI_CD/`](./8_CI_CD/)                                       | Continuous integration and deployment components                                                                 |
 | [`9_Monitoring_Observability/`](./9_Monitoring_Observability/) | Monitoring and observability components                                                                          |
 
@@ -466,7 +466,7 @@ This makes model versions, metrics, and deployment state traceable.
 ```text
 binance_dashboard/
 │
-├── 3_Pipeline/
+├── Pipeline/
 │   ├── config/
 │   ├── data/
 │   ├── models/
@@ -475,12 +475,12 @@ binance_dashboard/
 │   ├── main.py
 │   └── README.md
 │
-├── 4_Deploy_Online/
+├── Online/
 │   ├── api/
 │   ├── shared/
 │   └── README.md
 │
-├── 7_Deployment_Test/
+├── Deployment_test/
 │   ├── dashboard/
 │   ├── mlflow/
 │   ├── mlruns/
@@ -505,7 +505,7 @@ binance_dashboard/
 ## 1. Train the models
 
 ```bash
-cd 3_Pipeline
+cd Pipeline
 python main.py --all-horizons
 ```
 
@@ -516,7 +516,7 @@ This runs the offline training workflow and produces tracked and registered mode
 From the deployment test environment:
 
 ```bash
-cd ../7_Deployment_Test
+cd ../Deployment_test
 sudo docker compose up --build
 ```
 

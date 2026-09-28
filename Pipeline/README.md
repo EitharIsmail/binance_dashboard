@@ -1151,7 +1151,7 @@ data/features/
 # Directory Structure
 
 ```text
-3_Pipeline/
+Pipeline/
 │
 ├── config/
 │   ├── config.py
@@ -1380,7 +1380,7 @@ This pipeline is responsible for producing the model.
 The online deployment is responsible for serving it.
 
 ```text
-3_Pipeline
+Pipeline
 ──────────
 Historical data
       ↓
@@ -1394,7 +1394,7 @@ Registered model
       │
       │ migration / deployment
       ▼
-4_Deploy_Online
+Online
 ───────────────
 MLflow Production model
       ↓
@@ -1511,7 +1511,7 @@ The architecture supports expansion to additional symbols and horizons as the pr
 From this directory:
 
 ```bash
-cd 3_Pipeline
+cd Pipeline
 ```
 
 Run with defaults:

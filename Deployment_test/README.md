@@ -240,7 +240,7 @@ http://mlflow:1060
 The deployment environment stores the MLflow database in:
 
 ```text
-7_Deployment_Test/mlflow/mlflow.db
+Deployment_test/mlflow/mlflow.db
 ```
 
 The directory is mounted into the container:
@@ -274,7 +274,7 @@ The project has an MLflow environment associated with the training pipeline and 
 Conceptually:
 
 ```text
-3_Pipeline
+Pipeline
      │
      ▼
 Training MLflow
@@ -301,14 +301,14 @@ The model artifact available under `mlruns/` represents the model available to t
 The API is built from:
 
 ```text
-../4_Deploy_Online/api/Dockerfile
+../Online/api/Dockerfile
 ```
 
 The Docker Compose configuration uses:
 
 ```yaml
 build:
-  context: ../4_Deploy_Online
+  context: ../Online
   dockerfile: api/Dockerfile
 ```
 
@@ -317,12 +317,12 @@ This means the deployment test does not duplicate the API source code.
 Instead:
 
 ```text
-7_Deployment_Test
+Deployment_test
        │
        └── docker-compose.yml
                     │
                     ▼
-             4_Deploy_Online
+             Online
                     │
                     ▼
                 FastAPI
@@ -689,7 +689,7 @@ ssh eithar@35.202.67.240
 Then:
 
 ```bash
-cd ~/binance_dashboard/7_Deployment_Test
+cd ~/binance_dashboard/Deployment_test
 ```
 
 Start the deployment:
@@ -864,7 +864,7 @@ The local pipeline can then communicate with the VPS MLflow server through the S
 Run the pipeline:
 
 ```bash
-python 3_Pipeline/flow.py
+python Pipeline/flow.py
 ```
 
 The resulting communication is:
@@ -1100,7 +1100,7 @@ This means MLflow's database and artifacts are not stored only inside the tempor
 The deployment structure is:
 
 ```text
-7_Deployment_Test/
+Deployment_test/
 │
 ├── mlflow/
 │   └── mlflow.db
@@ -1183,7 +1183,7 @@ For example:
 The broader project is divided into several stages.
 
 ```text
-3_Pipeline
+Pipeline
     │
     │ Train + evaluate
     ▼
@@ -1191,7 +1191,7 @@ Training MLflow
     │
     │ Model deployment/migration
     ▼
-7_Deployment_Test
+Deployment_test
     │
     ├── MLflow
     │
@@ -1207,9 +1207,9 @@ The responsibilities are therefore:
 
 | Component                    | Responsibility                            |
 | ---------------------------- | ----------------------------------------- |
-| `3_Pipeline`                 | Train and evaluate models                 |
-| `4_Deploy_Online`            | Implement the FastAPI serving layer       |
-| `7_Deployment_Test`          | Run the complete containerized deployment |
+| `Pipeline`                 | Train and evaluate models                 |
+| `Online`            | Implement the FastAPI serving layer       |
+| `Deployment_test`          | Run the complete containerized deployment |
 | `8_CI_CD`                    | Automate build/test/deployment workflows  |
 | `9_Monitoring_Observability` | Monitor the deployed system               |
 
@@ -1444,13 +1444,13 @@ echo $MLFLOW_TRACKING_URI
 ## Run the training pipeline locally
 
 ```bash
-python 3_Pipeline/flow.py
+python Pipeline/flow.py
 ```
 
 ## Go to deployment directory on VPS
 
 ```bash
-cd ~/binance_dashboard/7_Deployment_Test
+cd ~/binance_dashboard/Deployment_test
 ```
 
 ## Build and start
@@ -1511,7 +1511,7 @@ docker compose down
 
 # Summary
 
-`7_Deployment_Test` is the integration environment that connects the project's trained ML model to a complete online application:
+`Deployment_test` is the integration environment that connects the project's trained ML model to a complete online application:
 
 ```text
                 ┌──────────────┐
