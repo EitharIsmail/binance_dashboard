@@ -35,6 +35,7 @@ services:
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:1060
       - ROOT_PATH=/api
+      - ACTIVE_HORIZONS=30m
     depends_on:
       - mlflow
     ports:
