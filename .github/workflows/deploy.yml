@@ -28,3 +28,14 @@ jobs:
             git pull origin main && \
             cd Deployment_test && \
             docker compose up -d --build"
+
+      - name: Check SSH agent
+        run: |
+          ssh-add -l
+
+      - name: Test VPS SSH
+        run: |
+          ssh -v \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
+            "whoami"
