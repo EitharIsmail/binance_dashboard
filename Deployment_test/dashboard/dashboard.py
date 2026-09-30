@@ -13,8 +13,10 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import streamlit as st
+import pandas as pd
 
 ONLINE_API = os.getenv("ONLINE_API", "http://localhost:8000")
+BATCH_API = os.getenv("BATCH_API", "http://localhost:1062")
 
 FIXED_HORIZON = "30m"
 FIXED_HORIZON_MINUTES = 30
@@ -22,7 +24,7 @@ FIXED_SYMBOL_DISPLAY = "Bitcoin (BTC/USDT)"
 
 st.set_page_config(page_title="Bitcoin Direction Predictor", page_icon="₿", layout="centered")
 
-st.title("₿₿ Bitcoin Direction Predictor ₿₿")
+st.title("₿ Bitcoin Direction Predictor ")
 
 st.markdown(
     f"This tool predicts whether **Bitcoin's price** will go significantly "

@@ -58,6 +58,7 @@ services:
     container_name: binance-dashboard
     environment:
       - ONLINE_API=http://api:1061
+      - BATCH_API=http://batch-api:1062
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
@@ -65,12 +66,33 @@ services:
       - STREAMLIT_SERVER_ADDRESS=0.0.0.0
     depends_on:
       - api
+      - batch-api
     ports:
       - "1063:1063"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
         "import urllib.request; urllib.request.urlopen('http://localhost:1063/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+
+  # ─────────────────────────────────────────────────────────────
+  # Batch Analysis API — serves batch market analysis
+  # ─────────────────────────────────────────────────────────────
+  batch-api:
+    build:
+      context: ../Batch
+      dockerfile: Dockerfile
+    container_name: binance-batch-api
+    ports:
+      - "1062:1062"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:1062/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
