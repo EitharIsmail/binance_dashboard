@@ -24,7 +24,15 @@ st.set_page_config(page_title="Bitcoin Direction Predictor", page_icon="₿", la
 
 #st.title("₿ Bitcoin Direction Predictor")
 st.markdown(
-    '<h1 style="color: #F0B90B;">₿ Bitcoin Direction Predictor</h1>',
+    """
+    <h1 class="bitcoin-title">₿ Bitcoin Direction Predictor</h1>
+
+    <style>
+    .bitcoin-title {
+        color: #F0B90B !important;
+    }
+    </style>
+    """,
     unsafe_allow_html=True
 )
 
