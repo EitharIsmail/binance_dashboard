@@ -20,9 +20,11 @@ jobs:
 
       - name: Deploy to production
         run: |
-          ssh -o StrictHostKeyChecking=no \
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o IdentitiesOnly=yes \
             ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
             "cd ${{ secrets.PROJECT_PATH }} && \
-             git pull origin main && \
-             cd Deployment_test && \
-             docker compose up -d --build"
+            git pull origin main && \
+            cd Deployment_test && \
+            docker compose up -d --build"
