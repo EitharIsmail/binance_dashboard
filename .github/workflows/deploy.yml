@@ -22,15 +22,12 @@ jobs:
         # subsequent steps can SSH out without a password prompt
 
       - name: Deploy to production
-        uses: matheusvanzan/sshpass-action@v2
-        with:
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USERNAME }}
-          key: ${{ secrets.PRIVATE_KEY }}
-          run: |
-            cd ${{ secrets.PROJECT_PATH }}
-            git pull origin main
-            cd Deployment_test
-            docker compose up -d --build
+        run: |
+              ssh -o StrictHostKeyChecking=no \
+                ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
+                "cd ${{ secrets.PROJECT_PATH }} && \
+                git pull origin main && \
+                cd Deployment_test && \
+                docker compose up -d --build"
         # SSHs INTO your VPS and runs these three commands there --
         # this is the step that actually touches your real server
