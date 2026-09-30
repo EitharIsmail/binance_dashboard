@@ -22,7 +22,12 @@ FIXED_SYMBOL_DISPLAY = "Bitcoin (BTC/USDT)"
 
 st.set_page_config(page_title="Bitcoin Direction Predictor", page_icon="₿", layout="centered")
 
-st.title("₿ Bitcoin Direction Predictor")
+#st.title("₿ Bitcoin Direction Predictor")
+st.markdown(
+    '<h1 style="color: #F0B90B;">₿ Bitcoin Direction Predictor</h1>',
+    unsafe_allow_html=True
+)
+
 st.markdown(
     f"This tool predicts whether **Bitcoin's price** will go significantly "
     f"**up**, significantly **down**, or stay **roughly unchanged**, over "
