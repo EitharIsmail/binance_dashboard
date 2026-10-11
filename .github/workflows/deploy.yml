@@ -1,4 +1,4 @@
-name: CI/CD
+name: Binance CI/CD
 
 on:
   push:
@@ -13,29 +13,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start SSH agent
+      - name: Load SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.PRIVATE_KEY }}
 
+      - name: Check SSH agent
+        run: |
+          ssh-add -l
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Test VPS SSH
+        run: |
+          ssh \
+            -o IdentitiesOnly=yes \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
+            "whoami"
+
       - name: Deploy to production
         run: |
           ssh \
-            -o StrictHostKeyChecking=no \
             -o IdentitiesOnly=yes \
             ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
             "cd ${{ secrets.PROJECT_PATH }} && \
             git pull origin main && \
             cd Deployment_test && \
             docker compose up -d --build"
-
-      - name: Check SSH agent
-        run: |
-          ssh-add -l
-
-      - name: Test VPS SSH
-        run: |
-          ssh -v \
-            -o StrictHostKeyChecking=no \
-            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
-            "whoami"
