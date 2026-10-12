@@ -18,30 +18,21 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.PRIVATE_KEY }}
 
-      - name: Check SSH agent
-        run: |
-          ssh-add -l
-
       - name: Add VPS to known hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Test VPS SSH
-        run: |
-          ssh \
-            -o PreferredAuthentications=publickey \
-            -o PasswordAuthentication=no \
-            -o KbdInteractiveAuthentication=no \
-            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
-            "whoami"
-
       - name: Deploy to production
         run: |
-          ssh \
-            -o IdentitiesOnly=yes \
-            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
-            "cd ${{ secrets.PROJECT_PATH }} && \
-            git pull origin main && \
-            cd Deployment_test && \
-            docker compose up -d --build"
+          ssh ${{ secrets.USERNAME }}@${{ secrets.HOST }} << 'EOF'
+                      set -e
+
+                      cd ${{ secrets.PROJECT_PATH }}
+                      git pull origin main
+
+                      cd binance_dashboard/Deployment_test
+                      docker compose up -d --build
+
+                      docker compose ps
+                    EOF
