@@ -31,7 +31,7 @@ jobs:
                       cd ${{ secrets.PROJECT_PATH }}
                       git pull origin main
 
-                      cd binance_dashboard/Deployment_test
+                      cd Deployment_test
                       docker compose up -d --build
 
                       docker compose ps
