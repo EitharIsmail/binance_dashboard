@@ -97,3 +97,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────
+  # Prometheus
+  # ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: binance-prometheus
+    volumes:
+      - ./Monitoring/Prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:1082:9090"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+
+  # ─────────────────────────────────────────────────────────────
+  # Grafana
+  # ─────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: binance-grafana
+    volumes:
+      - ./Monitoring/Grafana/DataSource:/etc/grafana/provisioning/datasources:ro
+      - ./Monitoring/Grafana/Dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:1083:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:

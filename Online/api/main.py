@@ -19,10 +19,23 @@ from api.config import *
 import io
 import zipfile
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from typing import Optional
 
+import time
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
+from api.metrics import (
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    ACTIVE_REQUESTS,
+    PREDICTION_COUNT,
+    PREDICTION_LATENCY,
+    PREDICTION_RESULT_COUNT,
+    MODEL_INFO,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -60,6 +73,17 @@ async def lifespan(app: FastAPI):
         stage="Production",
         tracking_uri= flow_config.tracking_uri,
     )
+
+    #we want Grafana to know which model is currently serving predictions
+    for horizon, state in app_state.model_states.items():
+        MODEL_INFO.info({
+        "symbol": data_config.symbol,
+        "horizon": horizon,
+        "model_name": state.model_name,
+        "version": str(state.version),
+        "alias": state.stage,
+        })
+        
     if not app_state.model_states:
         logger.warning(
             "⚠️ No models loaded for any horizon -- /predict will return 503 "
@@ -76,6 +100,34 @@ app = FastAPI(title="Binance Direction Classifier API",
     version="1.0.0",
     lifespan=lifespan,
     ROOT_PATH="/api")
+
+### The prometheus_middleware block i added recently
+@app.middleware("http")
+async def prometheus_middleware(request, call_next):
+    start_time = time.time()
+
+    ACTIVE_REQUESTS.inc()
+
+    try:
+        response = await call_next(request)
+
+        duration = time.time() - start_time
+
+        REQUEST_COUNT.labels(
+            method=request.method,
+            endpoint=request.url.path,
+            status=response.status_code,
+        ).inc()
+
+        REQUEST_LATENCY.labels(
+            method=request.method,
+            endpoint=request.url.path,
+        ).observe(duration)
+
+        return response
+
+    finally:
+        ACTIVE_REQUESTS.dec()
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
@@ -109,6 +161,13 @@ def root():
         "predict": "/predict"
     }
 
+# the promethus metrics
+@app.get("/metrics")
+def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 @app.get("/health")
 def health():
@@ -150,11 +209,23 @@ def predict(request: CoinRequest):
                 detail="Not enough recent candle history to compute all features yet.",
             )
 
+        #we want to time the prediction and increment the relevant counters
+        prediction_start = time.time()
+
         prediction_mapped = s.pipeline.predict(latest_row)[0]
+
+        prediction_duration = time.time() - prediction_start
+
+        PREDICTION_LATENCY.observe(prediction_duration)
+        PREDICTION_COUNT.inc()
 
         prediction_original = INVERSE_LABEL_MAP[prediction_mapped]
 
         predicted_direction = DIRECTION_NAMES[prediction_original]
+
+        PREDICTION_RESULT_COUNT.labels(
+            direction=predicted_direction
+        ).inc()
 
         return PredictionResponse(
             prediction=predicted_direction,
