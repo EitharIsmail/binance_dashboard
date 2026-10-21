@@ -21,6 +21,7 @@ class ModelState:
     feature_engineer: FeatureEngineer
     version: str
     run_id: str
+    algorithm: Optional[str] = None
     val_f1: Optional[float] = None
     test_f1: Optional[float] = None
     val_accuracy: Optional[float] = None
