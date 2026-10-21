@@ -91,7 +91,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
       "targets": [
-        {"expr": "sum(predictions_total{job=\"binance-api\"})", "legendFormat": "Predictions", "refId": "A"}
+        {"expr": "sum(prediction_results_total{job=\"binance-api\"})", "legendFormat": "Predictions", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
       "options": {
@@ -109,7 +109,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
       "targets": [
-        {"expr": "sum(rate(predictions_total{job=\"binance-api\"}[5m]))", "legendFormat": "Predictions/sec", "refId": "A"}
+        {"expr": "sum(rate(prediction_results_total{job=\"binance-api\"}[5m]))", "legendFormat": "Predictions/sec", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "reqps", "min": 0}, "overrides": []},
       "options": {
