@@ -35,6 +35,10 @@ from api.metrics import (
     PREDICTION_LATENCY,
     PREDICTION_RESULT_COUNT,
     MODEL_INFO,
+    MODEL_VALIDATION_ACCURACY,
+    MODEL_TEST_ACCURACY,
+    MODEL_VALIDATION_F1,
+    MODEL_TEST_F1,
 )
 
 
@@ -83,6 +87,32 @@ async def lifespan(app: FastAPI):
         "version": str(state.version),
         "alias": state.stage,
         })
+
+        metric_labels = {
+            "symbol": state.symbol,
+            "horizon": horizon,
+            "version": str(state.version),
+        }
+
+        if state.val_accuracy is not None:
+            MODEL_VALIDATION_ACCURACY.labels(**metric_labels).set(
+                state.val_accuracy
+            )
+
+        if state.test_accuracy is not None:
+            MODEL_TEST_ACCURACY.labels(**metric_labels).set(
+                state.test_accuracy
+            )
+
+        if state.val_f1 is not None:
+            MODEL_VALIDATION_F1.labels(**metric_labels).set(
+                state.val_f1
+            )
+
+        if state.test_f1 is not None:
+            MODEL_TEST_F1.labels(**metric_labels).set(
+                state.test_f1
+            )
         
     if not app_state.model_states:
         logger.warning(

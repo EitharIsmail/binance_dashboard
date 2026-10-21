@@ -23,6 +23,8 @@ class ModelState:
     run_id: str
     val_f1: Optional[float] = None
     test_f1: Optional[float] = None
+    val_accuracy: Optional[float] = None
+    test_accuracy: Optional[float] = None
 
 
 def _registered_model_name(symbol: str, horizon: str) -> str:
@@ -63,6 +65,8 @@ def load_model_metadata(symbol: str, horizon: str, stage: str, tracking_uri: str
         "run_id": version_info.run_id,
         "val_f1": metrics.get("val_f1_macro"),
         "test_f1": metrics.get("test_f1_macro"),
+        "val_accuracy": metrics.get("val_accuracy"),
+        "test_accuracy": metrics.get("test_accuracy"),
     }
 
 
@@ -108,6 +112,8 @@ def load_model_state(
         run_id=metadata["run_id"],
         val_f1=metadata["val_f1"],
         test_f1=metadata["test_f1"],
+        val_accuracy=metadata["val_accuracy"],
+        test_accuracy=metadata["test_accuracy"],
     )
 
 

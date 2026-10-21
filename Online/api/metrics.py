@@ -76,3 +76,31 @@ MODEL_INFO = Info(
     "model",
     "Information about the currently loaded Binance model",
 )
+
+# ============================================================
+# OFFLINE MODEL EVALUATION METRICS FROM MLFLOW
+# ============================================================
+
+MODEL_VALIDATION_ACCURACY = Gauge(
+    "model_validation_accuracy",
+    "Validation accuracy of the deployed model",
+    ["symbol", "horizon", "version"],
+)
+
+MODEL_TEST_ACCURACY = Gauge(
+    "model_test_accuracy",
+    "Test accuracy of the deployed model",
+    ["symbol", "horizon", "version"],
+)
+
+MODEL_VALIDATION_F1 = Gauge(
+    "model_validation_f1_macro",
+    "Validation macro F1 score of the deployed model",
+    ["symbol", "horizon", "version"],
+)
+
+MODEL_TEST_F1 = Gauge(
+    "model_test_f1_macro",
+    "Test macro F1 score of the deployed model",
+    ["symbol", "horizon", "version"],
+)
