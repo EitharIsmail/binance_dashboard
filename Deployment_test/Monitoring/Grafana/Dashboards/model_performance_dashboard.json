@@ -296,7 +296,65 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 8,
+      "title": "Deployed Model Details",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "targets": [
+        {
+          "expr": "model_info{job=\"binance-api\",symbol=\"BTCUSDT\",horizon=\"30m\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "Value": true
+            },
+            "renameByName": {
+              "model_name": "Registered Model",
+              "algorithm": "Algorithm",
+              "symbol": "Symbol",
+              "horizon": "Horizon",
+              "version": "Version",
+              "alias": "Stage"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      }
     }
+
   ],
   "templating": {
     "list": []

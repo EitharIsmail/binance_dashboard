@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
         "model_name": state.model_name,
         "version": str(state.version),
         "alias": state.stage,
+        "algorithm": state.algorithm or "Unknown",
         })
 
         metric_labels = {

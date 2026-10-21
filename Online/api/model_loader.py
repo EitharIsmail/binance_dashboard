@@ -59,6 +59,8 @@ def load_model_metadata(symbol: str, horizon: str, stage: str, tracking_uri: str
     version_info = versions[0]
     run = client.get_run(version_info.run_id)
     metrics = run.data.metrics
+    params = run.data.params
+    algorithm = params.get("model_name", "Unknown")
 
     return {
         "version": version_info.version,
@@ -67,6 +69,7 @@ def load_model_metadata(symbol: str, horizon: str, stage: str, tracking_uri: str
         "test_f1": metrics.get("test_f1_macro"),
         "val_accuracy": metrics.get("val_accuracy"),
         "test_accuracy": metrics.get("test_accuracy"),
+        "algorithm": algorithm,
     }
 
 
@@ -114,6 +117,7 @@ def load_model_state(
         test_f1=metadata["test_f1"],
         val_accuracy=metadata["val_accuracy"],
         test_accuracy=metadata["test_accuracy"],
+        algorithm=metadata["algorithm"],
     )
 
 
