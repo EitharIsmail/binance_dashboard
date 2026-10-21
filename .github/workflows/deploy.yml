@@ -26,13 +26,13 @@ jobs:
       - name: Deploy to production
         run: |
           ssh ${{ secrets.USERNAME }}@${{ secrets.HOST }} << 'EOF'
-                      set -e
+          set -e
 
-                      cd ${{ secrets.PROJECT_PATH }}
-                      git pull origin main
+          cd ${{ secrets.PROJECT_PATH }}
+          git pull origin main
 
-                      cd Deployment_test
-                      docker compose up -d --build
+          cd Deployment_test
+          docker compose up -d --build
 
-                      docker compose ps
-                      EOF
+          docker compose ps
+          EOF
